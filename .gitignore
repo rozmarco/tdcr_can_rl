@@ -35,9 +35,6 @@ Makefile
 # macOS system files
 .DS_Store
 
-# MuJoCo
-MUJOCO_LOG.TXT
-
 # Miscellaneous
-tdcr_sim_mujoco
+MUJOCO_LOG.TXT
 todo.txt

@@ -1,0 +1,4 @@
+[submodule "tdcr_sim_mujoco"]
+	path = tdcr_sim_mujoco
+	url = https://github.com/cshentu/tdcr-sim-mujoco.git
+	branch = extensible

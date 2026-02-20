@@ -7,9 +7,9 @@ class QNetwork(nn.Module):
         self, 
         state_dim: int, 
         action_dim: int, 
-        hidden_dim: int=128
+        hidden_dim: int=64
     ):
-        super().__init__()
+        super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.q = nn.Linear(hidden_dim, 1)

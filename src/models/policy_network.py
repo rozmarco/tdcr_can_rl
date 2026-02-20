@@ -2,16 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from typing import Optional
+
 from .st_encoder import SpatialTemporalEncoder
 from .diffusion import DiffusionNetwork
 from .latent import LatentHead
-
-# Experiments (Some redundant, choose interesting)
-# 1. Diffusion single-step (predict 1-step) with random sampling
-# 2. Diffusion multi-step (predict N-step) with reward selection
-# 3. Diffusion multi-step (predict N-step) with reward selection and classifier-free guidance (reward gradient?)
-# 4. Diffusion multi-step (predict N-step) with reward selection and MCTS (Lookahead, Receding Horizon, Sampling-based optimization)
-# 5. ... (with CEM or MPPI)
 
 class LatentDiffusionPolicyNetwork(nn.Module):
     """
@@ -41,6 +36,7 @@ class LatentDiffusionPolicyNetwork(nn.Module):
         r_input_size: int,
         o_input_size: int,
         action_dim: int,
+        horizon: int = 1,
         d_embedding: int = 64,
         d_hidden: int = 128,
         d_state: int = 64,
@@ -48,15 +44,10 @@ class LatentDiffusionPolicyNetwork(nn.Module):
         d_ff: int = 64,
         num_layers: int = 2,
         diffusion_steps: int = 30,
-        time_embed_type: str = "learned",
-        device=None
+        time_embed_type: str = "learned"
     ):
         super(LatentDiffusionPolicyNetwork, self).__init__()
-
-        if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
+        self.horizon = horizon
        
         self.encoder = SpatialTemporalEncoder(
             r_input_size,
@@ -133,7 +124,7 @@ class LatentDiffusionPolicyNetwork(nn.Module):
         x: torch.Tensor, 
         graph: torch.Tensor, 
         state: torch.Tensor, 
-        horizon: int
+        horizon: Optional[int] = None
     ) -> torch.Tensor:
         """
         Perform a multi-step rollout of the policy over a given horizon.
@@ -162,6 +153,7 @@ class LatentDiffusionPolicyNetwork(nn.Module):
         actions = []
         r_state = x
         ssm_state = state
+        horizon = self.horizon if horizon is None else horizon
 
         for _ in range(horizon):
             # action, r_state, ssm_state = self.sample(r_state, graph, ssm_state)

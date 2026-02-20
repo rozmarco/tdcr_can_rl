@@ -1,7 +1,7 @@
-# 🚀 Project Title
+# 🚀 TDCR-Agent
 
 > One-line description of your project.  
-> Example: "Deep Reinforcement Learning agent trained with PPO to solve continuous control tasks."
+> Example: "Deep Reinforcement Learning agent trained with SAC to solve continuous control tasks."
 
 ---
 
@@ -30,19 +30,23 @@ Briefly describe:
 ```
 project-name/
 │
+├── checkpoints/           # Saved models
+├── configs/               # YAML / JSON config files
 ├── data/                  # Datasets (raw / processed)
+├── docs/                  # Documentation
 ├── src/
+│   ├── buffers/           # Replay buffers
+│   ├── environment/       # Simulation environment
 │   ├── models/            # Model definitions
-│   ├── training/          # Training logic
-│   ├── evaluation/        # Evaluation scripts
+│   ├── training/          # Training logic, Losses, and RL algorithms
 │   ├── utils/             # Utility functions
 │   └── __init__.py
 │
-├── configs/               # YAML / JSON config files
-├── checkpoints/           # Saved models
-├── tests/                 # Unit tests
-├── requirements.txt
+├── test/                  # Unit tests
 ├── main.py
+├── pytest.ini
+├── requirements.txt
+├── train.py
 └── README.md
 ```
 
@@ -53,22 +57,23 @@ project-name/
 ### 1️⃣ Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/project-name.git
-cd project-name
+git clone --recursive -b <main-repo-branch> https://github.com/yourusername/project-name.git --remote-submodules
 ```
 
 ### 2️⃣ Create a virtual environment (recommended)
 
 ```bash
-python -m venv venv
-source venv/bin/activate        # Linux / Mac
-venv\Scripts\activate           # Windows
+python -m venv .venv
+source .venv/bin/activate        # Linux / Mac
+venv\Scripts\activate            # Windows
 ```
 
 ### 3️⃣ Install dependencies
 
 ```bash
 pip install -r requirements.txt
+cd < submodule >
+pip install -e .
 ```
 
 ---
@@ -97,10 +102,10 @@ python predict.py --input sample.json
 
 ## 🧠 Model / Algorithm
 
-- **Type:** (CNN / Transformer / PPO / DQN / SAC / etc.)
-- **Framework:** (PyTorch / TensorFlow / JAX)
-- **Loss Function:**  
-- **Optimizer:**  
+- **Type:** (CNN / Transformer / SAC / etc.)
+- **Framework:** (PyTorch)
+- **Loss Function:**  (MSE)
+- **Optimizer:**  (AdamW)
 - **Key Hyperparameters:**
   - Learning rate:
   - Batch size:

@@ -6,15 +6,11 @@ from gymnasium.envs.mujoco import MujocoEnv
 class CustomEnv(MujocoEnv):
     """
     A custom MuJoCo environment for robotic simulation using Gymnasium.
-
-    Args:
-        scene_path (str or Path): Path to the MuJoCo XML configuration file.
-        render_mode (str): The mode used for rendering. 
     """
     def __init__(
         self, 
-        scene_path,
-        render_mode:str="human"
+        scene_path:  str,
+        render_mode: str = "human"
     ):
         super().__init__(
             model_path=str(scene_path), 
@@ -26,8 +22,6 @@ class CustomEnv(MujocoEnv):
         self._print_init_state()
 
     def _print_init_state(self):
-        # print(dir(self.data))
-
         # Generalized State
         print(f"Gen Positions (qpos):      {self.data.qpos.shape}")
         print(f"Actuators outputs:         {self.data.ctrl}")
@@ -50,17 +44,6 @@ class CustomEnv(MujocoEnv):
         #     name = self.model.body(i).name
         #     print(f"Body ID {i} | Name: {name}")
 
-        # Body ID 1 | Name: target_pose
-        # Body ID 3 | Name: obstacles
-        # Body ID 4 | Name: obstacle0
-        # Body ID 5 | Name: obstacle1
-        # Body ID 6 | Name: obstacle2
-        # Body ID 7 | Name: obstacle3
-        # Body ID 8 | Name: obstacle4
-        # Body ID 9 | Name: extensible_base
-        # Body ID 10 | Name: tdcr_mount
-        # Body ID 112 | Name: tdcr_tip
-
     def get_state(self):
         # Identify obstacles position relative to tdcr_tip
         effector_id = self.model.body('tdcr_tip').id
@@ -73,9 +56,11 @@ class CustomEnv(MujocoEnv):
         for name in obstacle_names:
             body = self.model.body(name)
 
-            actual_pos = body.pos
+            actual_pos = body.ipos
             rel_pos = actual_pos - effector_pos
             obstacles_rel.extend(rel_pos)
+
+            # TODO: Need a way to verify the obstacles_rel calculations are correct
 
             g_id = self.model.body_geomadr[body.id]
             radius = self.model.geom_size[g_id][0]
@@ -94,46 +79,24 @@ class CustomEnv(MujocoEnv):
         obstacles_rel = np.array(obstacles_rel)
         obstacles_radius = np.array(obstacles_radius)
         tdcr_radius = np.array(tdcr_radius)
-
-        # TODO: Get the variable for extension, because currently may not be extending
-
-        # Prep for output
-        robot_state = np.concatenate([
-            self.data.ten_length.flatten(),
-            self.data.qfrc_constraint.flatten()  # Force applied on each joint
-            # TODO: Eff to goal position
-            # TODO: Eff to goal orientation
-        ]).astype(np.float32)
-        obstacle_state = np.concatenate([
-            # TODO: Link pose vs Body Curvature (Assume constant-curvature, kappa)
-            # self.data.qpos.flatten(),         # Body position
-                                                # Body orientation
-            tdcr_radius.ravel(),                # Body radius # TODO: If all radius are 0.006, then input scalar to reduce dim
-            obstacles_rel.ravel(),              # Obstacle position relative to EEF
-            obstacles_radius.ravel(),           # Obstacle radius
-        ])
-
-        return {
-            "robot_state": robot_state,
-            "obstacle_state": obstacle_state
-        }
     
-        # return {
-        #     "robot": {
-        #         "ten_length": self.data.ten_length.copy(),
-        #         "qfrc": self.data.qfrc_constraint.copy(),
-        #         "link_radii": tdcr_radius, # Array of size (num_links,)
-        #         "link_poses": self.data.xpos[link_ids].copy(), # Get all link positions
-        #     },
-        #     "obstacles": {
-        #         "rel_positions": obstacles_rel.reshape(-1, 3), # (N, 3)
-        #         "radii": obstacles_radius, # (N,)
-        #     },
-        #     "goal": {
-        #         "position": self.goal_pos - effector_pos,
-        #         "orientation": 
-        #     }
-        # }
+        return {
+            "robot": {
+                "ten_length": self.data.ten_length.copy(),
+                "qfrc": self.data.qfrc_constraint.copy(),
+                "link_radii": tdcr_radius,                   # TODO: Lots of redundant info here, but radius can be important. 
+                                                             #       If all radius is 0.006, then input scalar to reduce dim.
+                                                             # TODO: Link pose vs Body Curvature. Does constant curvature give more useful info than link pose?
+            },
+            "obstacles": {
+                "rel_positions": obstacles_rel.reshape(-1, 3), # (N, 3)
+                "radii": obstacles_radius.reshape(-1, 1),      # (N, 1)
+            },
+            "goal": {
+                "position": 0,           # TODO: Eff to goal position
+                "orientation": 0         # TODO: Eff to goal orientation
+            }
+        }
     
     def get_reward(self, state, action, next_state):
         return 0
@@ -147,6 +110,7 @@ class CustomEnv(MujocoEnv):
         if case == 0:
             # TODO: Randomize initial pose and end pose
             pass
+        
         else:
             # TODO: Start from current pose and set random end pose
             pass

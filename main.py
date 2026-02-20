@@ -8,13 +8,11 @@ import mujoco
 
 from tdcr_sim_mujoco.src.utils.config_loader import PROJECT_ROOT
 
-from src.envrunner import EnvRunner
-# from src.training.buffer import ReplayBuffer
+from src.environment.envrunner import EnvRunner
 from src.models.policy_network import LatentDiffusionPolicyNetwork
 
-# Default configuration
+
 DEFAULT_CONFIG = {
-    # "scene": "assets/custom_cylinders.xml",
     "scene": "assets/cylinders5_links100.xml",
     "input_device": "tdcr_keyboard",
     "controller": "tdcr_joint",
@@ -37,6 +35,7 @@ DEFAULT_CONFIG = {
     },
     "description": "TDCR task-space control with Jacobian IK"
 }
+
 
 def get_scene_info(model, scene_path):
     """Extract scene information from model."""
@@ -63,7 +62,7 @@ def get_scene_info(model, scene_path):
         except:
             break
 
-    obs_dim = model.nu + model.nv - 1
+    obs_dim = model.nu + model.nv + num_links + 1
 
     is_combined = "franka_scene" in str(scene_path).lower() and (
         "tdcr" in str(scene_path).lower() or "ftdcr" in str(scene_path).lower()
@@ -83,6 +82,7 @@ def get_scene_info(model, scene_path):
     }
 
     return info
+
 
 if __name__ == "__main__":
     # Resolve scene path relative to project root
@@ -113,9 +113,10 @@ if __name__ == "__main__":
     with torch.no_grad():
         policy = LatentDiffusionPolicyNetwork(
             scene_info['obs_dim'], 
-            50, # TODO
+            3 + 1, # TODO: (3D) 3 positions + 1 radius
             scene_info['num_obstacles']
-        ).eval()
-        # buffer = ReplayBuffer()
+        )
+        # TODO: Load model weights
+        policy.eval()
         env = EnvRunner(scene_path, policy)
-        env.run_session()
+        env.run_session(is_train=False)

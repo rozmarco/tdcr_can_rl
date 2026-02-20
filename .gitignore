@@ -25,6 +25,10 @@ var/
 # VSCode settings
 .vscode/
 
+# Sphinx build directory
+docs/_build/
+docs/build/
+
 # CMake and build artifacts
 build/
 CMakeFiles/
@@ -32,8 +36,14 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 
-# macOS system files
+# Jupyter Notebook checkpoints (if using nbsphinx)
+.ipynb_checkpoints/
+
+# Environment-specific files
 .DS_Store
+
+# Pytest
+.pytest_cache
 
 # Miscellaneous
 MUJOCO_LOG.TXT

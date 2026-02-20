@@ -4,6 +4,33 @@ import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import softmax
 
+def generate_edges(n: int) -> torch.Tensor:
+    """
+    Generate an edge_index connecting nodes across multiple agents.
+    """
+    if n < 2:
+        return torch.empty((2, 0), dtype=torch.long)
+
+    # Nodes 1 to n-1
+    others = torch.arange(1, n)
+
+    # 0 -> others
+    edges_out = torch.stack([
+        torch.zeros(n - 1, dtype=torch.long),
+        others
+    ], dim=0)
+
+    # others -> 0
+    edges_in = torch.stack([
+        others,
+        torch.zeros(n - 1, dtype=torch.long)
+    ], dim=0)
+
+    # Combine
+    edge_index = torch.cat([edges_out, edges_in], dim=1)
+
+    return edge_index
+
 class GraphNeuralNetwork(MessagePassing):
     """
     Attention-Gated Graph Neural Network with Global Attention Pooling.
@@ -87,33 +114,6 @@ class GraphNeuralNetwork(MessagePassing):
             nn.GELU(),
             nn.Linear(out_channels//2, 1)
         )
-
-    def generate_edges(self, n: int) -> torch.Tensor:
-        """
-        Generate an edge_index connecting nodes across multiple agents.
-        """
-        if n < 2:
-            return torch.empty((2, 0), dtype=torch.long)
-
-        # Nodes 1 to n-1
-        others = torch.arange(1, n)
-
-        # 0 -> others
-        edges_out = torch.stack([
-            torch.zeros(n - 1, dtype=torch.long),
-            others
-        ], dim=0)
-
-        # others -> 0
-        edges_in = torch.stack([
-            others,
-            torch.zeros(n - 1, dtype=torch.long)
-        ], dim=0)
-
-        # Combine
-        edge_index = torch.cat([edges_out, edges_in], dim=1)
-
-        return edge_index
 
     def forward(self, x, edge_index):
         # x: [Nodes, in_channels] (e.g., Node 0 is Robot, others are Obstacles)

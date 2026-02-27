@@ -15,10 +15,18 @@ Subpackages
 Submodules
 ----------
 
-src.eval module
----------------
+src.hyperparameter\_search module
+---------------------------------
 
-.. automodule:: src.eval
+.. automodule:: src.hyperparameter_search
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+src.sac module
+--------------
+
+.. automodule:: src.sac
    :members:
    :show-inheritance:
    :undoc-members:

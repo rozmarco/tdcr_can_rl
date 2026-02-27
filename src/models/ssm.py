@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class StateSpaceModel(nn.Module):
     """
@@ -25,35 +26,55 @@ class StateSpaceModel(nn.Module):
     def __init__(
         self, 
         d_model: int, 
-        d_state: int=16,
+        d_state: int,
     ):
         super(StateSpaceModel, self).__init__()
-
         self.d_model = d_model
         self.d_state = d_state
 
-        # Learnable state-space parameters
-        self.A = nn.Parameter(torch.randn(d_state, d_state))
-        self.B = nn.Parameter(torch.randn(d_state, d_model))  # Input-to-state
-        self.C = nn.Parameter(torch.randn(d_model, d_state))  # State-to-output
-        self.D = nn.Parameter(torch.randn(d_model))
+        # A is a diagonal matrix (stored as a vector)
+        self.A_log = nn.Parameter(torch.log(torch.arange(1, d_state + 1).float()))
 
-        # Fixed step size (delta)
-        self.log_delta = nn.Parameter(torch.tensor([0.0]))
+        # Selection Mechanism (The 'Selective' in Selective SSM)
+        # delta, B, and C are functions of the input x
+        self.dt_rank = max(1, d_model // 16)
+        self.x_proj = nn.Linear(d_model, self.dt_rank + d_state * 2, bias=False)
+        self.dt_proj = nn.Linear(self.dt_rank, d_model, bias=True)
 
-    def forward(self, state: torch.Tensor, u_t: torch.Tensor) -> torch.Tensor:
+        # D Skip connection (Residual)
+        self.D = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, u: torch.Tensor):
         """
-        Forward pass of the SSM layer.
+        u: [batch, seq_len, d_model]
         """
-        # Discretization (Zero-Order Hold)
-        delta = torch.exp(self.log_delta)
-        A_bar = torch.exp(-delta * self.A)
-        B_bar = delta * self.B
+        batch, seq_len, d_model = u.shape
+        
+        # Project entire sequence at once
+        # x_proj_result: [batch, seq_len, dt_rank + 2*d_state]
+        x_proj_result = self.x_proj(u)
+        dt_raw, B, C = torch.split(x_proj_result, [self.dt_rank, self.d_state, self.d_state], dim=-1)
 
-        # State-space recurrence: s_t = A * s_t + B * u_t
-        state = A_bar @ state + B_bar @ u_t.mT
+        # Compute Delta and Discretize A
+        delta = F.softplus(self.dt_proj(dt_raw)) # [batch, seq_len, d_model]
+        A = -torch.exp(self.A_log)               # [d_state]
+        
+        # dA = exp(delta * A) -> [batch, seq_len, d_model, d_state]
+        dA = torch.exp(torch.einsum('bsd,n->bsdn', delta, A))
+        
+        # dB = delta * B -> [batch, seq_len, d_model, d_state]
+        dB = torch.einsum('bsd,bsn->bsdn', delta, B)
 
-        # Output transformation: y_t = C * s_t + D * u_t
-        y = self.C @ state + self.D @ u_t.mT
+        # Simplified Selective Scan
+        states = []
+        curr_state = torch.zeros(batch, d_model, self.d_state).to(u.device)
+        
+        for t in range(seq_len):
+            # curr_state = dA_t * prev_state + dB_t * u_t
+            curr_state = dA[:, t] * curr_state + dB[:, t] * u[:, t].unsqueeze(-1)
+            
+            # y_t = state_t @ C_t
+            y_t = torch.einsum('bdn,bn->bd', curr_state, C[:, t])
+            states.append(y_t)
 
-        return y, state
+        return torch.stack(states, dim=1) + u * self.D

@@ -1,17 +1,13 @@
-import copy
 import yaml
-import Path
-import numpy as np
-
+import ray
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 
-from typing import Type
+from tqdm import tqdm
+from pathlib import Path
+from itertools import count
 
-from src.environment.envrunner import EnvRunner
-from src.models.policy_network import LatentDiffusionPolicyNetwork
+from src.environment.envrunner import EnvRunner, ParallelEnvRunner
+from src.models.policy_network import LatentDiffusionPolicyPlanner
 from src.models.q_network import QNetwork
 from src.buffers.buffer import ReplayBuffer
 from src.sac import SoftActorCritic
@@ -19,46 +15,60 @@ from src.sac import SoftActorCritic
 from tdcr_sim_mujoco.src.utils.config_loader import PROJECT_ROOT
 
 
+def run_environment(env):
+    workers = [env.remote(True, scene_path, policy_network, config) 
+                for _ in range(config['env']['num_workers'])]
+    future_results = [w.run_session_remote.remote() for w in workers]
+    results = ray.get(future_results)
+    return results
+
+def get_sorted_npz():
+    npz_files = list(Path("data").rglob("*.npz"))
+    npz_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    npz_files = [str(p) for p in npz_files]
+    return npz_files
+
+def save_checkpoint(it, models):
+    # Overwrite the previous checkpoints
+    for name, model in models.items():
+        torch.save(model.state_dict(), f"checkpoints/{name}_{it}.pth")
+
 
 if __name__ == '__main__':
     PROJECT_ROOT_ = Path(__file__).parent.resolve()
 
-    # Load YAML configurations
-    config_file = Path(PROJECT_ROOT_ / "config" / "config.yaml")
+    # ----- YAML CONFIGURATION -----
+    config_file = Path(PROJECT_ROOT_ / "config" / "train.yaml")
 
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
 
-    # Initialization
-    policy_network = LatentDiffusionPolicyNetwork(
-        r_input_size=310,
-        o_input_size=4,
-        action_dim=5,
-        horizon=config["agent"]["horizon"],
-        d_embedding=config["model"]["policy"]["d_embedding"],
-        d_hidden=config["model"]["policy"]["d_hidden"],
-        d_state=config["model"]["policy"]["d_state"],
-        d_latent=config["model"]["policy"]["d_latent"],
-        d_ff=config["model"]["policy"]["d_ff"],
-        num_layers=config["model"]["policy"]["num_layers"],
-        diffusion_steps=config["model"]["policy"]["diffusion_steps"],
-        time_embed_type=config["model"]["policy"]["time_embed"]
+    # ----- INITIALIZATION -----
+    torch.manual_seed(config["seed"])
+
+    # TODO: Automatic initialization
+    r_dim = 331
+    action_dim = 5
+
+    policy_network = LatentDiffusionPolicyPlanner(
+        r_dim=r_dim,
+        action_dim=action_dim,
+        **config['model']["policy"]
     )
 
     q_network1 = QNetwork(
-        state_dim=
-        action_dim=
-        hidden_dim=config["model"]["q_network"]["hidden_dim"]
+        r_dim=r_dim,
+        action_dim=action_dim,
+        **config["model"]["q_network"]
     )
     q_network2 = QNetwork(
-        state_dim=
-        action_dim=
-        hidden_dim=config["model"]["q_network"]["hidden_dim"]
+        r_dim=r_dim,
+        action_dim=action_dim,
+        **config["model"]["q_network"]
     )
 
     buffer = ReplayBuffer(
         max_size=config["buffer"]["max_size"],
-        horizon=config["agent"]["horizon"],
         seed=config["seed"]
     )
 
@@ -67,7 +77,8 @@ if __name__ == '__main__':
         q1=q_network1,
         q2=q_network2,
         replay_buffer=buffer,
-        optimizer_class=config["agent"]["_target_"],
+        horizon=config["agent"]["horizon"],
+        optimizer_str=config["agent"]["optimizer"]["_target_"],
         policy_lr=config["agent"]["policy_lr"],
         q_lr=config["agent"]["q_lr"],
         batch_size=config["agent"]["batch_size"],
@@ -82,27 +93,36 @@ if __name__ == '__main__':
     if not scene_path.is_absolute():
         scene_path = PROJECT_ROOT / scene_path
 
-    env = EnvRunner(
-        scene_path, 
-        policy_network, 
-        buffer=buffer,
-        num_episodes=config["env"]["num_episodes"]
-    )
+    models_to_save = {"policy": policy_network, "q1": q_network1, "q2": q_network2}
+    checkpoint = config['agent']['checkpoint']
+    batch_size = config["agent"]["batch_size"]
 
-    # Run environment
-    env.run_session(is_train=True)
+    # ----- TRAINING -----
+    ray.init(ignore_reinit_error=True)
 
-    # Load data
-    data_folder = Path(PROJECT_ROOT / "data")
-    npz_files = list(data_folder.rglob("*.npz"))
-    buffer.load(npz_files)
+    for epoch in tqdm(range(config['epochs']), desc="Training Epochs"):
+        
+        # Run environment
+        if config['env']['run_env']:
+            with torch.no_grad():
+                policy_network.eval()
+                results = run_environment(ParallelEnvRunner)
+                tqdm.write(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
 
-    # Training loop
-    while not buffer.is_empty(): # TODO: Create function
-        sac.update()
+        # Load buffer
+        buffer.clear()
+        npz_files = get_sorted_npz()
+        buffer.load(npz_files)
+        tqdm.write(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
 
-    # TODO: Save model
+        # Training loop
+        for iteration in count():
+            if not buffer.can_sample(batch_size):
+                break
 
-    # TODO: Get reward
-    
-    # TODO: Create function with simulation and training (Compatible with Ray)
+            sac.update()
+
+            if iteration % checkpoint == 0:
+                save_checkpoint(iteration, models_to_save)
+
+    save_checkpoint(iteration, models_to_save)

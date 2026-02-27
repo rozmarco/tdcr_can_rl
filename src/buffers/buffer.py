@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-from typing import Union, List, Optional
+from typing import Union, List
 
 from src.buffers.base import BaseReplayBuffer
 from src.utils.sampler import NumpySampler
@@ -13,11 +13,9 @@ class ReplayBuffer(BaseReplayBuffer):
     def __init__(
         self, 
         max_size: int = 1000000,
-        horizon: int = 1,
         seed: int = 42
     ):
         self.max_size = max_size
-        self.horizon = horizon
 
         self.ptr = 0
         self.size = 0
@@ -28,26 +26,18 @@ class ReplayBuffer(BaseReplayBuffer):
         self.reward = None
         self.done = None
 
+        self.samples_consumed = 0
+
         self._rng = np.random.default_rng(seed)
         self.sampler = NumpySampler(rng=self._rng)
 
-    def _init_buffers(
-        self, 
-        state: Union[dict, np.ndarray],
-        action: np.ndarray
-    ):
+    def _init_buffers(self, action: np.ndarray):
         """
         Helper to create arrays based on the shapes of the first sample.
         """
-        if isinstance(state, dict):
-            state = np.concatenate([np.ravel(v) for v in state.values()])
-
-        s_shape = np.shape(state)
-        a_shape = np.shape(action)
-
-        self.state = np.zeros((self.max_size, *s_shape), dtype=np.float32)
-        self.next_state = np.zeros((self.max_size, *s_shape), dtype=np.float32)
-        self.action = np.zeros((self.max_size, *a_shape), dtype=np.float32)
+        self.state = np.empty((self.max_size, 1), dtype=object)
+        self.next_state = np.empty((self.max_size, 1), dtype=object)
+        self.action = np.zeros((self.max_size, *np.shape(action)), dtype=np.float32)
         self.reward = np.zeros((self.max_size, 1), dtype=np.float32)
         self.done = np.zeros((self.max_size, 1), dtype=bool)
     
@@ -73,8 +63,9 @@ class ReplayBuffer(BaseReplayBuffer):
         Returns:
             None
         """
+        # Assumption: If state is empty, then recent buffer initialization
         if self.state is None:
-            self._init_buffers(state, action)
+            self._init_buffers(action)
 
         self.state[self.ptr] = state
         self.action[self.ptr] = action
@@ -85,11 +76,7 @@ class ReplayBuffer(BaseReplayBuffer):
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
-    def sample(
-        self, 
-        batch_size: int,
-        horizon: Optional[int] = None
-    ):
+    def sample(self, batch_size: int, horizon: int=1):
         """
         Randomly samples a batch of experience sequences from the buffer.
 
@@ -100,21 +87,15 @@ class ReplayBuffer(BaseReplayBuffer):
         Returns:
             tuple: A tuple containing (states, actions, rewards, next_states, dones).
                 Each element is a NumPy array of shape (batch_size, horizon, dim).
-                If horizon=1, the temporal dimension is still present unless 
-                manually squeezed.
         """
-        if horizon is None:
-            horizon = self.horizon
-
         s_batch, a_batch, r_batch, ns_batch, d_batch = [], [], [], [], []
 
-        # Guard Check
         if horizon < 1 or self.size < horizon:
             return s_batch, a_batch, r_batch, ns_batch, d_batch
         
-        # Update Sampler & Get Indices (Without Replacement)
-        valid_range = self.size - horizon + 1
-        indices = self.sampler.sample(batch_size, valid_range)
+        # Sample for indices (Without Replacement)
+        indices = self.sampler.sample(batch_size, self.size - horizon + 1)
+        self.samples_consumed += len(indices)
 
         for start_idx in indices:
             # Check for 'done' within this specific horizon
@@ -131,9 +112,6 @@ class ReplayBuffer(BaseReplayBuffer):
             ns_batch.append(self.next_state[start_idx : effective_end])
             d_batch.append(self.done[start_idx : effective_end])
 
-        # Returns 5 lists of sequences. 
-        # Each list has length 'batch_size'.
-        # Each sequence within the list has length 'actual_len'.
         return s_batch, a_batch, r_batch, ns_batch, d_batch
     
     def __len__(self):
@@ -141,10 +119,24 @@ class ReplayBuffer(BaseReplayBuffer):
     
     def clear(self):
         """
-        Resets the buffer to an empty state.
+        Resets pointers. 
+        New data will overwrite old entries starting from index 0.
+        Does not reset the buffer to an empty state.
         """
         self.ptr = 0
         self.size = 0
+        self.samples_consumed = 0
+        # self.state.fill(None) 
+        # self.action.fill(0)
+        # self.next_state.fill(None) 
+        # self.reward.fill(0)
+        # self.done.fill(0)
+        
+    def can_sample(self, batch_size):
+        """
+        Checks if there is enough data left to form a batch.
+        """
+        return (self.size - self.samples_consumed) >= batch_size
 
     def save(self, file_path: str):
         """
@@ -178,7 +170,7 @@ class ReplayBuffer(BaseReplayBuffer):
             if not os.path.exists(path):
                 continue
 
-            with np.load(path) as data:
+            with np.load(path, allow_pickle=True) as data:
 
                 n_samples = len(data['state'])
                 for i in range(n_samples):

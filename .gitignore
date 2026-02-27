@@ -45,6 +45,8 @@ Makefile
 # Pytest
 .pytest_cache
 
-# Miscellaneous
+# Project specific
+checkpoints/
+data/
 MUJOCO_LOG.TXT
 todo.txt

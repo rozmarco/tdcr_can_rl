@@ -4,6 +4,14 @@ src.utils package
 Submodules
 ----------
 
+src.utils.data\_preprocessor module
+-----------------------------------
+
+.. automodule:: src.utils.data_preprocessor
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 src.utils.sampler module
 ------------------------
 

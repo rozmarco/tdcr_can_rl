@@ -4,21 +4,9 @@ import torch.nn.functional as F
 
 from .ssm import StateSpaceModel
 
-class MambaBlock(nn.Module):
-    """
-    Description:
-        For time-feature representation learning.
-        
-    Brief:
-        [Input] Temporal features [N, A, T, F]
-        [Output] Temporal features [N, A, T, F]
-
-    Args:
-        d_model (int): Dimension of the hidden layer
-        d_state (int):
-    """
+class MambaLayer(nn.Module):
     def __init__(self, d_model: int, d_state: int):
-        super(MambaBlock, self).__init__()
+        super(MambaLayer, self).__init__()
 
         self.ln = nn.LayerNorm(d_model)
 
@@ -42,42 +30,42 @@ class MambaBlock(nn.Module):
         # Communication
         self.ssm = StateSpaceModel(d_model, d_state)
 
-    def forward(self, x: torch.Tensor, ssm_state: torch.Tensor) -> torch.Tensor:
-        # x shape: [Batch, Features]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: [Batch, Sequence, Features]
         x_norm = self.ln(x)
 
         # --- Main branch ---
         x1 = self.w1(x_norm)
-        x_conv = self.conv1d(x1.unsqueeze(-1)).squeeze(-1) # [B, C, L]
+        x_conv = self.conv1d(x1.transpose(2, 1)).transpose(2, 1)
         x_conv = self.silu(x_conv)
-        x_ssm, next_ssm_state = self.ssm(ssm_state, x_conv)
+        x_ssm = self.ssm(x_conv)
 
         # --- Gating Mechanism ---
         v = self.silu(self.v1(x_norm))
 
         # --- Output ---
         out = self.w2(x_ssm * v)
-        return out, next_ssm_state
+        return out
 
-class MambaLayer(nn.Module):
-    def __init__(self, d_model: int, d_state: int, d_ff: int):
-        super(MambaLayer, self).__init__()
+class MambaBlock(nn.Module):
+    def __init__(self, d_model: int, d_state: int):
+        super(MambaBlock, self).__init__()
 
         self.ln1 = nn.LayerNorm(d_model)
-        self.mamba = MambaBlock(d_model, d_state)
+        self.mamba = MambaLayer(d_model, d_state)
 
         self.ln2 = nn.LayerNorm(d_model)
         self.ff = nn.Sequential(
-            nn.Linear(d_model, d_ff),
+            nn.Linear(d_model, d_model*3),
             nn.GELU(),
-            nn.Linear(d_ff, d_model)
+            nn.Linear(d_model*3, d_model)
         )
     
-    def forward(self, x: torch.Tensor, ssm_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
 
         x = self.ln1(x)
-        x, next_ssm_state = self.mamba(x, ssm_state)
+        x = self.mamba(x)
         x = x + residual
 
         residual = x
@@ -86,4 +74,4 @@ class MambaLayer(nn.Module):
         x = self.ff(x)
         x = x + residual
 
-        return x, next_ssm_state
+        return x

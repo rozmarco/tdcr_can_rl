@@ -1,27 +1,15 @@
 # 🚀 TDCR-Agent
 
-> One-line description of your project.  
-> Example: "Deep Reinforcement Learning agent trained with SAC to solve continuous control tasks."
+> Description of project.
 
 ---
 
 ## 📌 Overview
 
-Briefly describe:
-
-- The problem you are solving
+- Problem being solved
 - Why it matters
-- Your approach (ML model / RL algorithm / system design)
+- Your approach (ML model / RL algorithm)
 - Key results (if available)
-
----
-
-## ✨ Features
-
-- ✅ Modular and extensible codebase  
-- ✅ Reproducible experiments  
-- ✅ Config-driven training  
-- 🚧 Ongoing improvements  
 
 ---
 
@@ -57,7 +45,7 @@ project-name/
 ### 1️⃣ Clone the repository
 
 ```bash
-git clone --recursive -b <main-repo-branch> https://github.com/yourusername/project-name.git --remote-submodules
+git clone --recurse-submodules -b <branch-name> https://github.com/yourusername/project-name.git
 ```
 
 ### 2️⃣ Create a virtual environment (recommended)
@@ -83,7 +71,7 @@ pip install -e .
 ### 🔹 Train
 
 ```bash
-python train.py --config configs/default.yaml
+python train.py
 ```
 
 ### 🔹 Evaluate
@@ -110,3 +98,17 @@ python predict.py --input sample.json
   - Learning rate:
   - Batch size:
   - Epochs
+
+---
+
+## Benchmarks
+
+
+
+---
+
+## Documentation
+
+Check out our full documentation [here](https://your-username.github.io/your-repo-name/).
+
+---

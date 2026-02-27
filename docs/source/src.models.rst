@@ -4,6 +4,14 @@ src.models package
 Submodules
 ----------
 
+src.models.decoder module
+-------------------------
+
+.. automodule:: src.models.decoder
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 src.models.diffusion module
 ---------------------------
 
@@ -12,10 +20,18 @@ src.models.diffusion module
    :show-inheritance:
    :undoc-members:
 
-src.models.gnn module
----------------------
+src.models.encoder module
+-------------------------
 
-.. automodule:: src.models.gnn
+.. automodule:: src.models.encoder
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+src.models.film module
+----------------------
+
+.. automodule:: src.models.film
    :members:
    :show-inheritance:
    :undoc-members:
@@ -32,6 +48,14 @@ src.models.mamba module
 -----------------------
 
 .. automodule:: src.models.mamba
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+src.models.pe module
+--------------------
+
+.. automodule:: src.models.pe
    :members:
    :show-inheritance:
    :undoc-members:
@@ -56,14 +80,6 @@ src.models.ssm module
 ---------------------
 
 .. automodule:: src.models.ssm
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-src.models.st\_encoder module
------------------------------
-
-.. automodule:: src.models.st_encoder
    :members:
    :show-inheritance:
    :undoc-members:

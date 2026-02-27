@@ -9,7 +9,7 @@ import mujoco
 from tdcr_sim_mujoco.src.utils.config_loader import PROJECT_ROOT
 
 from src.environment.envrunner import EnvRunner
-from src.models.policy_network import LatentDiffusionPolicyNetwork
+from src.models.policy_network import LatentDiffusionPolicyPlanner
 
 
 DEFAULT_CONFIG = {
@@ -111,12 +111,8 @@ if __name__ == "__main__":
 
     # Simulation 
     with torch.no_grad():
-        policy = LatentDiffusionPolicyNetwork(
-            scene_info['obs_dim'], 
-            3 + 1, # TODO: (3D) 3 positions + 1 radius
-            scene_info['num_obstacles']
-        )
-        # TODO: Load model weights
+        policy = LatentDiffusionPolicyPlanner(scene_info['obs_dim'] + (scene_info['num_obstacles']*4), 5) # TODO: Hardcoded
         policy.eval()
-        env = EnvRunner(scene_path, policy)
-        env.run_session(is_train=False)
+        # TODO: Load model weights
+        env = EnvRunner(False, scene_path, policy, horizon=45)
+        env.run_session()

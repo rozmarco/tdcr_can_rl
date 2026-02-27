@@ -23,7 +23,7 @@ class NumpySampler:
         self.indices = np.array([], dtype=int)
         self._initialized = False
 
-    def sample(self, batch_size, size):
+    def sample(self, batch_size: int, size: int) -> np.ndarray:
         """
         Random sampling without replacement.
         """
@@ -37,7 +37,7 @@ class NumpySampler:
         if len(self.indices) == 0:
             return np.array([], dtype=int)     
 
-        # SAMPLING: Take what is available
+        # SAMPLE: Take what is available
         actual_batch = min(batch_size, len(self.indices))
         
         batch_indices = self.indices[:actual_batch]

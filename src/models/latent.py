@@ -6,7 +6,6 @@ class LatentHead(nn.Module):
     """
     Produces latent Gaussian distribution and samples z.
     """
-
     def __init__(self, d_hidden: int, d_latent: int):
         super(LatentHead, self).__init__()
 

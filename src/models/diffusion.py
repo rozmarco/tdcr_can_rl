@@ -64,7 +64,7 @@ class DiffusionNetwork(nn.Module):
 
         alpha_bar_t = self.alpha_bar[t]
         sqrt_ab = alpha_bar_t.sqrt().unsqueeze(-1).unsqueeze(-1)
-        sqrt_one_minus_ab = (1 - alpha_bar_t).sqrt().unsqueeze(-1).unsqueeze(-1)
+        sqrt_one_minus_ab = (1.0 - alpha_bar_t).sqrt().unsqueeze(-1).unsqueeze(-1)
         # print(sqrt_ab.shape, target_action.shape, sqrt_one_minus_ab.shape, noise.shape)
         noisy_action = sqrt_ab * target_action + sqrt_one_minus_ab * noise
 

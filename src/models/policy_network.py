@@ -6,11 +6,10 @@ import torch.nn.functional as F
 
 from typing import Optional, Callable
 
-from .mamba import MambaBlock
-from .encoder import SpatialTemporalEncoder
+from .encoder import RobotFeatureEncoder
 from .latent import LatentHead
-from .diffusion import DiffusionNetwork
 from .decoder import NoisePredictor
+from .diffusion import DiffusionNetwork
 
 class LatentDiffusionPolicyPlanner(nn.Module):
     """
@@ -51,14 +50,12 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         super(LatentDiffusionPolicyPlanner, self).__init__()
        
         # --- ENCODER ---
-        self.encoder = SpatialTemporalEncoder(
+        self.encoder = RobotFeatureEncoder(
             r_dim,
             d_hidden_enc,
-            d_embedding
-        )
-
-        self.mamba_block = nn.Sequential(
-            *[MambaBlock(d_embedding, d_state) for _ in range(num_blocks)]
+            d_embedding,
+            d_state,
+            num_blocks
         )
 
         self.latent = LatentHead(d_embedding, d_latent)
@@ -119,7 +116,6 @@ class LatentDiffusionPolicyPlanner(nn.Module):
                             the predicted actions for each timestep.
         """
         fused = self.encoder(x)
-        fused = self.mamba_block(fused)
         z, mu, std = self.latent(fused)
         plan = self.diffusion.sample(z, horizon, guide_fn, scale)
         log_pi = self.log_pi(plan, z)

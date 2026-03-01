@@ -1,7 +1,8 @@
 import random
 import numpy as np
+import mujoco
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Tuple, Any
 
 from gymnasium.envs.mujoco import MujocoEnv
 
@@ -116,6 +117,14 @@ class CustomEnv(MujocoEnv):
                 radius = self.model.geom_size[g_id][0]
                 tdcr_radius.append(radius)
 
+        tdcr_links = []
+        # Get the link poses
+        for i in range(self.model.nbody):
+            body = self.model.body(i)
+            if ('link' in body.name) and (body.name is not 'link0'): # link0 is a fixed link, so does not move.
+                g_id = self.model.body_geomadr[body.id]
+                # TODO: World-coordinate-independent link state
+
         # Change to numpy
         obstacles_rel = np.array(obstacles_rel)
         obstacles_radius = np.array(obstacles_radius)
@@ -181,8 +190,8 @@ class CustomEnv(MujocoEnv):
     ) -> StepResults:
         state = self.get_state()
 
-        # Step the physics
-        self.do_simulation(action, self.frame_skip)
+        # Bypass do_simulation and step mujoco sim
+        self._step_mujoco_simulation(action, self.frame_skip)
         
         next_state = self.get_state()
         reward = self.get_reward(state, action, next_state)
@@ -191,3 +200,27 @@ class CustomEnv(MujocoEnv):
         info = {}
         
         return next_state, reward, terminated, truncated, info
+    
+    def _step_mujoco_simulation(self, ctrl, n_frames):
+        """
+        Step over the MuJoCo simulation.
+        """
+        # Identify all actuator indices belonging to Group 1 and Group 2 as defined in the XML,
+        # and assign control to motors
+        group1_indices = [i for i in range(self.model.nu) if self.model.actuator_group[i] == 1]
+        group2_indices = [i for i in range(self.model.nu) if self.model.actuator_group[i] == 2]
+
+        self.data.ctrl[group1_indices] = ctrl[0]
+        self.data.ctrl[group2_indices] = ctrl[1]
+
+        # Identify all tendons defined in the XML, then assign controls to actuator
+        ten0_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, 'seg_0_ten_0')
+        ten1_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, 'seg_0_ten_1')
+
+        self.data.ctrl[ten0_id] = ctrl[2]
+        self.data.ctrl[ten1_id] = ctrl[3]
+
+        # Step the simulator
+        mujoco.mj_step(self.model, self.data, nstep=n_frames)
+
+        mujoco.mj_rnePostConstraint(self.model, self.data)

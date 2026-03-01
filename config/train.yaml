@@ -1,4 +1,4 @@
-scene: "assets/cylinders5_links100.xml"
+scene: "assets/cylinders5_links100.xml" # "assets/ftdcr_v6_tension.xml"
 
 epochs: 1 # 10
 device: "cpu"

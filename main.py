@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import yaml
 from pathlib import Path
 
 import torch
@@ -13,7 +14,7 @@ from src.models.policy_network import LatentDiffusionPolicyPlanner
 
 
 DEFAULT_CONFIG = {
-    "scene": "assets/cylinders5_links100.xml",
+    "scene": "assets/ftdcr_v6_tension.xml", # "assets/cylinders5_links100.xml"
     "input_device": "tdcr_keyboard",
     "controller": "tdcr_joint",
     "controller_params": {
@@ -85,7 +86,15 @@ def get_scene_info(model, scene_path):
 
 
 if __name__ == "__main__":
-    # Resolve scene path relative to project root
+    # ----- YAML CONFIGURATION -----
+    PROJECT_ROOT_ = Path(__file__).parent.resolve()
+
+    config_file = Path(PROJECT_ROOT_ / "config" / "main.yaml")
+
+    with open(config_file, "r") as f:
+        config = yaml.safe_load(f)
+
+    # ----- SCENE METADATA ------
     scene_path = Path(DEFAULT_CONFIG["scene"])
     
     if not scene_path.is_absolute():
@@ -95,10 +104,8 @@ if __name__ == "__main__":
         print(f"Error: Scene file not found: {scene_path}")
         print(f"Project root: {PROJECT_ROOT}")
 
-    # Load model
     model = mujoco.MjModel.from_xml_path(str(scene_path))
 
-    # Get scene information
     scene_info = get_scene_info(model, scene_path)
 
     print(f"\nScene information:")
@@ -109,10 +116,23 @@ if __name__ == "__main__":
     if scene_info.get("is_tdcr", False):
         print(f"  - TDCR segments: {scene_info.get('num_tdcr_segments', 0)}")
 
-    # Simulation 
+    # ----- SETUP POLICY AND ENVIRONMENT -----
+    torch.manual_seed(0)
+
     with torch.no_grad():
-        policy = LatentDiffusionPolicyPlanner(scene_info['obs_dim'] + (scene_info['num_obstacles']*4), 5) # TODO: Hardcoded
+        # TODO: Hardcoded.
+        state_dim = 149
+        action_dim = 4
+
+        policy = LatentDiffusionPolicyPlanner(state_dim, action_dim)
         policy.eval()
-        # TODO: Load model weights
-        env = EnvRunner(False, scene_path, policy, horizon=45)
+
+        my_file = Path("checkpoints/tdcr_policy_v1.pth")
+        if my_file.is_file():
+            torch.load(policy.state_dict(), str(my_file), weights_only=True)
+        else:
+            print(f"No weights found, initializing random weights.")
+
+        # Run environment with policy
+        env = EnvRunner(False, scene_path, policy, horizon=30, render_mode="human")
         env.run_session()

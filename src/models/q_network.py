@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .encoder import SpatialTemporalEncoder
+from .encoder import RobotFeatureEncoder
 from .decoder import NoisePredictor
 
 class QNetwork(nn.Module):
@@ -16,7 +16,7 @@ class QNetwork(nn.Module):
         num_blocks: int = 3
     ):
         super(QNetwork, self).__init__()
-        self.encoder = SpatialTemporalEncoder(r_dim, d_embedding, d_hidden)
+        self.encoder = RobotFeatureEncoder(r_dim, d_embedding, d_hidden, d_state, num_blocks)
         self.backbone = NoisePredictor(action_dim, d_hidden, d_state, num_blocks)
         self.ff = nn.Linear(action_dim, 1)
 

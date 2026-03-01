@@ -4,11 +4,9 @@ import torch.nn.functional as F
 
 from .ssm import StateSpaceModel
 
-class MambaLayer(nn.Module):
+class MambaBlock(nn.Module):
     def __init__(self, d_model: int, d_state: int):
-        super(MambaLayer, self).__init__()
-
-        self.ln = nn.LayerNorm(d_model)
+        super(MambaBlock, self).__init__()
 
         # Computation
         self.w1 = nn.Linear(d_model, d_model)
@@ -32,27 +30,26 @@ class MambaLayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x shape: [Batch, Sequence, Features]
-        x_norm = self.ln(x)
 
         # --- Main branch ---
-        x1 = self.w1(x_norm)
+        x1 = self.w1(x)
         x_conv = self.conv1d(x1.transpose(2, 1)).transpose(2, 1)
         x_conv = self.silu(x_conv)
         x_ssm = self.ssm(x_conv)
 
         # --- Gating Mechanism ---
-        v = self.silu(self.v1(x_norm))
+        v = self.silu(self.v1(x))
 
         # --- Output ---
         out = self.w2(x_ssm * v)
         return out
 
-class MambaBlock(nn.Module):
+class MambaTransformerLayer(nn.Module):
     def __init__(self, d_model: int, d_state: int):
-        super(MambaBlock, self).__init__()
+        super(MambaTransformerLayer, self).__init__()
 
         self.ln1 = nn.LayerNorm(d_model)
-        self.mamba = MambaLayer(d_model, d_state)
+        self.mamba = MambaBlock(d_model, d_state)
 
         self.ln2 = nn.LayerNorm(d_model)
         self.ff = nn.Sequential(

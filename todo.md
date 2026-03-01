@@ -1,16 +1,18 @@
-# Reduce num of links to 15 (else OOM)
+# Fix physics-breaking manuevers
 
 # Plot reward per epoch to show convergence
 # Plot chosen diffused path on map
+# Revise main.py
+#   + Use args instead of yaml
 
 # Create documentation using Sphinx
 # Create README.md
 
 
 # Experiments
-# 2. Diffusion multi-step (predict N-step) with reward selection
-# 3. Diffusion multi-step (predict N-step) with reward selection and classifier-free guidance (reward gradient?)
-# 4. Diffusion multi-step (predict N-step) with reward selection and MCTS (Lookahead, Receding Horizon, Sampling-based optimization)
+# 1. Diffusion multi-step (predict N-step) with reward selection
+# 2. Diffusion multi-step (predict N-step) with reward selection and classifier-free guidance (reward gradient?)
+# 3. Diffusion multi-step (predict N-step) with reward selection and MCTS (Lookahead, Receding Horizon, Sampling-based optimization)
 
 
 import matplotlib.pyplot as plt

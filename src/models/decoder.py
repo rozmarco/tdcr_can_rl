@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .mamba import MambaBlock
+from .mamba import MambaTransformerLayer
 from .film import FiLM
 
 class NoisePredictor(nn.Module):
@@ -39,7 +39,7 @@ class NoisePredictor(nn.Module):
         self.blocks = nn.ModuleList([
             nn.ModuleDict({
                 "film": FiLM(d_latent, d_latent),
-                "mamba": MambaBlock(d_latent, d_state),
+                "mamba": MambaTransformerLayer(d_latent, d_state),
             }) for _ in range(num_blocks)
         ])
         

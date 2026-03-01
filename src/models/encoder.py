@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 
-class SpatialTemporalEncoder(nn.Module):
+from .mamba import MambaTransformerLayer
+
+class RobotFeatureEncoder(nn.Module):
     """
     Encodes robot and obstacle features.
     """
@@ -9,15 +11,23 @@ class SpatialTemporalEncoder(nn.Module):
         self, 
         r_input_size: int, 
         d_hidden: int, 
-        d_embedding: int
+        d_embedding: int,
+        d_state: int,
+        num_blocks: int
     ):
-        super(SpatialTemporalEncoder, self).__init__()
+        super(RobotFeatureEncoder, self).__init__()
         
-        self.robot_encoder = nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(r_input_size, d_hidden),
             nn.GELU(),
             nn.Linear(d_hidden, d_embedding)
         )
 
+        self.mamba_block = nn.Sequential(
+            *[MambaTransformerLayer(d_embedding, d_state) for _ in range(num_blocks)]
+        )
+
     def forward(self, x):
-        return self.robot_encoder(x)
+        x = self.mlp(x)
+        x = self.mamba_block(x)
+        return x

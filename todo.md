@@ -1,4 +1,4 @@
-# Fix physics-breaking manuevers
+# Fix physics (Clipping, )
 
 # Plot reward per epoch to show convergence
 # Plot chosen diffused path on map

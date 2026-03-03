@@ -46,9 +46,8 @@ if __name__ == '__main__':
     # ----- INITIALIZATION -----
     torch.manual_seed(config["seed"])
 
-    # TODO: Automatic initialization
-    r_dim = 149
-    action_dim = 4
+    r_dim = config["agent"]["r_dim"]
+    action_dim = config["agent"]["action_dim"]
 
     policy_network = LatentDiffusionPolicyPlanner(
         r_dim=r_dim,

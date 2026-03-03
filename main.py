@@ -121,8 +121,8 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         # TODO: Hardcoded.
-        state_dim = 149
-        action_dim = 4
+        state_dim = 40
+        action_dim = 3
 
         policy = LatentDiffusionPolicyPlanner(state_dim, action_dim)
         policy.eval()

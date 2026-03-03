@@ -22,7 +22,7 @@ class EnvRunner:
         is_train: bool,
         scene_path: str,
         policy: nn.Module,
-        horizon: int,
+        horizon: int = 1,
         num_episodes: int = 1,
         max_steps: int = 25000,
         frame_skips: int = 50,
@@ -58,6 +58,7 @@ class EnvRunner:
             data_dir (str): The directory where the environment outputs will be saved.
             seed (int): Random seed for environment and policy reproducibility.
         """
+        assert horizon >= 1, f"Horizon must be at least 1, but got {horizon}"
 
         self.is_train = is_train
         self.scene_path = scene_path
@@ -74,7 +75,7 @@ class EnvRunner:
 
         self.env = CustomEnv(scene_path, render_mode, frame_skips, timestep)
 
-    def get_action(self, state: Dict) -> np.ndarray:
+    def _get_action(self, state: Dict) -> np.ndarray:
         r_state = flatten_state(state, self.device).view(1, 1, -1)
 
         plan, _ = self.policy.rollout(r_state, self.horizon)
@@ -88,24 +89,21 @@ class EnvRunner:
 
         return action
     
-    def get_filename(self):
-        return f"{self.data_dir}/{str(uuid.uuid4())[:8]}_{time.strftime("%Y%m%d_%H%M")}"
-    
     def _save_buffer(self):
+        filename = f"{self.data_dir}/{str(uuid.uuid4())[:8]}_{time.strftime("%Y%m%d_%H%M")}"
         if self.is_train:
-            self.buffer.save(self.get_filename())
+            self.buffer.save(filename)
             self.buffer.clear()
     
     def run_episodes(self):
         for episode in range(self.num_episodes):
-            print(f"\nStarting Episode {episode + 1}")
 
             state, info = self.env.reset(seed=self.seed)
             done = False
             step_count = 0
 
             while not done:
-                action = self.get_action(state)
+                action = self._get_action(state)
 
                 next_state, reward, terminated, truncated, info = self.env.step(action)
 

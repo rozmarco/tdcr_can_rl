@@ -119,4 +119,4 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         z, mu, std = self.latent(fused)
         plan = self.diffusion.sample(z, horizon, guide_fn, scale)
         log_pi = self.log_pi(plan, z)
-        return plan, log_pi
+        return F.tanh(plan), log_pi

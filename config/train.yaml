@@ -1,6 +1,6 @@
 scene: "assets/ftdcr_v6_tension.xml"
 
-epochs: 15        # Number of training epochs
+epochs: 15        # Number of training sessions
 device: "cpu"     # Device to run training on ("cpu" or "cuda" or "mps")
 seed: 42          # Random seed for reproducibility
 

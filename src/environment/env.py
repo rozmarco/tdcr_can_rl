@@ -2,7 +2,6 @@ import re
 import random
 import numpy as np
 
-import mujoco
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.mujoco import MujocoEnv
@@ -58,10 +57,17 @@ class CustomEnv(MujocoEnv):
             **kwargs
         )
 
-        self.goal_pos = self._get_new_goal()
-
+        self.goal_pos = np.array([0.5, 0.0], dtype=np.float32)
         self._cache_ids()
         self._print_init_state()
+        self.base_pos = np.array([0.0, 0.0])
+        self.max_reach = 0.5   # example — measure from model
+        self.action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(2,),   # planar bend + extension
+            dtype=np.float32
+        )
 
         self.model.opt.timestep = timstep # Set discretization to 2ms (500Hz).
 
@@ -203,9 +209,6 @@ class CustomEnv(MujocoEnv):
 
         return np.array(obstacles_radius)
     
-    def _get_new_goal(self):
-        return np.random.uniform(low=[0.3, -0.2], high=[0.6, 0.2])
-    
     def _print_init_state(self):
         print("\n--- Environment Initialized ---")
         print(f"qpos shape:        {self.data.qpos.shape}")
@@ -248,23 +251,51 @@ class CustomEnv(MujocoEnv):
         }
 
     def get_reward(self, obs, action):
-        """
-        Simple shaped reward.
-        """
-        dist = np.linalg.norm(obs["goal_rel_pos"])
-        contact_bonus = np.sum(obs["contact_hist"]) * 0.01
-        action_penalty = 0.001 * np.sum(action ** 2)
-        
-        goal_reached_bonus = 10000 if np.linalg.norm(obs["goal_rel_pos"]) < 0.02 else 0
 
-        return -dist + contact_bonus - action_penalty + goal_reached_bonus
+        dist = np.linalg.norm(obs["goal_rel_pos"])
+
+        goal_threshold = 0.02
+        goal_bonus = 10.0 if dist < goal_threshold else 0.0
+
+        distance_reward = -dist**2
+
+        contact_bonus = 0.01 * np.sum(obs["contact_hist"])
+
+
+        # Quadratic control regularization.
+        # Encourages smooth tendon/extension adjustments and prevents
+        # the policy from exploiting actuator saturation or producing
+        # high-frequency oscillations.
+        action_penalty = 0.001 * np.sum(action**2) 
+
+        time_penalty = -0.01
+
+        return (
+            distance_reward
+            + goal_bonus
+            + contact_bonus
+            - action_penalty
+            + time_penalty
+        )
 
     def is_terminal(self, obs):
         return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
 
     def reset_model(self):
-        self.set_state(self.init_qpos, self.init_qvel)
-        self.goal_pos = self._get_new_goal()
+
+
+        qpos = self.init_qpos.copy()
+        qvel = np.zeros_like(self.init_qvel)
+
+        # Small randomization in tendon space
+        noise_scale = 0.01
+        qpos += np.random.uniform(-noise_scale, noise_scale, size=qpos.shape)
+
+        self.set_state(qpos, qvel)
+
+        # Randomize goal
+        self.goal_pos = self._sample_valid_goal()
+
         return self.get_state()
 
     def step(self, action: np.ndarray):
@@ -276,8 +307,14 @@ class CustomEnv(MujocoEnv):
         # action = np.clip(action, -1.0, 1.0) # Moved into policy network
         
         # Apply Tendons and Extension differences
-        self.data.ctrl[:2] += action[:2]
-        self.data.ctrl[self.linear_actuator_ids] += action[-1]
+        bending_delta = action[0]
+        extension_delta = action[1]
+
+        # Map bending to tendon actuator IDs
+        self.data.ctrl[self.planar_tendon_ids] += bending_delta
+
+        # Map extension
+        self.data.ctrl[self.linear_actuator_ids] += extension_delta
 
         self.do_simulation(self.data.ctrl, self.frame_skip)
         
@@ -288,3 +325,41 @@ class CustomEnv(MujocoEnv):
         info = {}
         
         return next_state, reward, terminated, truncated, info
+    
+    def _sample_valid_goal(self):
+        max_reach = self.max_reach   # define this once
+
+        for _ in range(100):  # avoid infinite loop
+            goal = np.array([
+                random.uniform(0.3, 0.6),
+                random.uniform(-0.2, 0.2),
+            ])
+
+            if not self._is_goal_valid(goal, max_reach):
+                continue
+
+            return goal
+
+        raise RuntimeError("Failed to sample valid goal.")
+    def _is_inside_obstacle(self, goal):
+        for body_id in self.obstacle_body_ids:
+            center = self.data.xpos[body_id][:2]
+            geom_id = self.model.body_geomadr[body_id]
+            radius = self.model.geom_size[geom_id][0]
+
+            if np.linalg.norm(goal - center) < radius + 0.01:
+                return True
+        return False
+    
+    def _is_reachable(self, goal, max_reach):
+        return np.linalg.norm(goal - self.base_pos) <= max_reach
+    
+    def _is_goal_valid(self, goal, max_reach):
+
+        if self._is_inside_obstacle(goal):
+            return False
+
+        if not self._is_reachable(goal, max_reach):
+            return False
+
+        return True

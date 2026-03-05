@@ -142,6 +142,9 @@ class ReplayBuffer(BaseReplayBuffer):
         """
         Save the buffer to disk.
         """
+        if self.size <= 0:
+            return
+
         if not file_path.endswith('.npz'):
             file_path += '.npz'
             

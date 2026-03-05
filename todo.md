@@ -1,40 +1,15 @@
-# Fix physics (Clipping, )
+# No validity check on self.goal_pos
+#  1. Does goal make use of the obstacles?
+#  2. Is the goal position inside an obstacle?
+#  3. Can it be reached at full extension by the robot.
+# Is starting position inside any obstacles?
 
-# Plot reward per epoch to show convergence
-# Plot chosen diffused path on map
+# Model: Handle arbitrary number of obstacles
+
+# Plot path on map
 # Revise main.py
 #   + Use args instead of yaml
 
 # Create documentation using Sphinx
 # Create README.md
-
-
-# Experiments
-# 1. Diffusion multi-step (predict N-step) with reward selection
-# 2. Diffusion multi-step (predict N-step) with reward selection and classifier-free guidance (reward gradient?)
-# 3. Diffusion multi-step (predict N-step) with reward selection and MCTS (Lookahead, Receding Horizon, Sampling-based optimization)
-
-
-import matplotlib.pyplot as plt
-
-steps = np.arange(len(rewards))
-avg_return = rewards.mean(axis=1)
-std_return = rewards.std(axis=1)
-
-plt.figure(figsize=(8, 5))
-
-# Plot with shaded std deviation
-plt.fill_between(steps, avg_return - std_return, avg_return + std_return, 
-                color='blue', alpha=0.2, label='Std deviation')
-
-# Plot average return
-plt.plot(steps, avg_return, color='blue', label='Average Return', linewidth=2)
-plt.grid(which='major', linestyle='--', alpha=0.6)
-plt.grid(which='minor', linestyle=':', alpha=0.3)
-plt.minorticks_on()
-plt.gca().set_facecolor('#f0f0f0')
-plt.xlabel("Steps", fontsize=12)
-plt.ylabel("Average Return", fontsize=12)
-plt.title("SAC Training Performance", fontsize=14)
-plt.legend()
-plt.show()
+#   + Dependencies: Python 3.13

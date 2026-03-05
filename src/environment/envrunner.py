@@ -1,9 +1,13 @@
+import time
+import uuid
+import numpy as np
+
+import mujoco
+from gymnasium.wrappers import TimeLimit
+from stable_baselines3.common.monitor import Monitor
+
 import torch
 import torch.nn as nn
-
-import time, uuid
-import numpy as np
-import mujoco
 
 from pathlib import Path
 from typing import Dict
@@ -30,6 +34,7 @@ class EnvRunner:
         render_mode: str = "human",
         buffer: ReplayBuffer = ReplayBuffer(),
         data_dir: str = "data",
+        logs_dir: str = "logs",
         seed: int = 42,
         device = 'cpu'
     ):
@@ -67,13 +72,17 @@ class EnvRunner:
         self.buffer = buffer
         self.num_episodes = num_episodes
         self.max_steps = max_steps
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir)
+        self.logs_dir = Path(logs_dir)
         self.seed = seed
         self.device = device
 
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         self.env = CustomEnv(scene_path, render_mode, frame_skips, timestep)
+        self.env = TimeLimit(self.env, max_episode_steps=self.max_steps)
+        self.env = Monitor(self.env, filename=str(self.logs_dir / f"monitor_{id(self)}.csv"))
 
     def _get_action(self, state: Dict) -> np.ndarray:
         r_state = flatten_state(state, self.device).view(1, 1, -1)
@@ -106,19 +115,14 @@ class EnvRunner:
                 action = self._get_action(state)
 
                 next_state, reward, terminated, truncated, info = self.env.step(action)
-
-                # Truncate simulation at max steps.
-                # Prevents never-ending simulation.
-                step_count += 1
-                if step_count >= self.max_steps:
-                    truncated = True
-
+                
                 done = terminated or truncated
 
                 # Only add during training sessions
-                # Skip add for step 1 because of state type
-                if self.is_train and step_count > 1:
+                # Skip add for step 1 because of state type mismatch
+                if self.is_train and step_count >= 1:
                     self.buffer.add(state, action, reward, next_state, done)
+                step_count += 1
 
                 state = next_state
                 self.env.render()

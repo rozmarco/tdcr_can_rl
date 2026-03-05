@@ -1,6 +1,9 @@
+import os
 import yaml
+
 import ray
 import torch
+import numpy as np
 
 from tqdm import tqdm
 from pathlib import Path
@@ -29,9 +32,12 @@ def get_sorted_npz():
     return npz_files
 
 def save_checkpoint(it, models):
-    # Overwrite the previous checkpoints
+    os.makedirs("checkpoints", exist_ok=True)
+
     for name, model in models.items():
-        torch.save(model.state_dict(), f"checkpoints/{name}_{it}.pth")
+        path = f"checkpoints/{name}_{it}.pth"
+        if not os.path.exists(path):
+            torch.save(model.state_dict(), path)
 
 
 if __name__ == '__main__':
@@ -45,6 +51,7 @@ if __name__ == '__main__':
 
     # ----- INITIALIZATION -----
     torch.manual_seed(config["seed"])
+    np.random.seed(config["seed"])
 
     r_dim = config["agent"]["r_dim"]
     action_dim = config["agent"]["action_dim"]

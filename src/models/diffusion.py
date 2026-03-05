@@ -98,7 +98,7 @@ class DiffusionNetwork(nn.Module):
             z_expanded = z + t_embed.unsqueeze(1)
             predicted_noise = self.noise_predictor(sequence, z_expanded)
 
-            # Classifier-Free Guidance
+            # Classifier Guidance
             if guide_fn is not None:
                 with torch.enable_grad():
                     sequence.requires_grad_(True)

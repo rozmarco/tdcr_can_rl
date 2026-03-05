@@ -1,21 +1,21 @@
 scene: "assets/ftdcr_v6_tension.xml"
 
-epochs: 1 # 10
-device: "cpu"
-seed: 42
+epochs: 15        # Number of training epochs
+device: "cpu"     # Device to run training on ("cpu" or "cuda" or "mps")
+seed: 42          # Random seed for reproducibility
 
 env:
-  name: "tdcr-v1"
-  render: "rgb_array"
-  run_env: True # True
-  num_episodes: 1
-  max_steps: 100 # 30000
-  num_workers: 1 # 2
+  name: "tdcr-v1"       # Name or ID of the environment
+  render: "rgb_array"   # Rendering mode ("rgb_array", "human")
+  run_env: True         # Whether to actually run the environment (False = testing)
+  num_episodes: 5       # Number of episodes to collect per session (run)
+  max_steps: 30000      # Maximum steps per episode before truncation.
+  num_workers: 2        # Number of parallel environment workers
   frame_skips: 50
   timestep: 0.002
 
 buffer:
-  max_size: 100000
+  max_size: 1000000     # Suggestion: max_size > num_episodes * max_steps * num_workers
 
 agent:
   r_dim: 40

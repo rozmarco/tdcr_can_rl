@@ -2,6 +2,7 @@ import re
 import random
 import numpy as np
 
+import mujoco
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.mujoco import MujocoEnv
@@ -57,7 +58,8 @@ class CustomEnv(MujocoEnv):
             **kwargs
         )
 
-        self.goal_pos = np.array([0.5, 0.0], dtype=np.float32)
+        self.goal_pos = self._get_new_goal()
+
         self._cache_ids()
         self._print_init_state()
 
@@ -201,6 +203,9 @@ class CustomEnv(MujocoEnv):
 
         return np.array(obstacles_radius)
     
+    def _get_new_goal(self):
+        return np.random.uniform(low=[0.3, -0.2], high=[0.6, 0.2])
+    
     def _print_init_state(self):
         print("\n--- Environment Initialized ---")
         print(f"qpos shape:        {self.data.qpos.shape}")
@@ -249,21 +254,17 @@ class CustomEnv(MujocoEnv):
         dist = np.linalg.norm(obs["goal_rel_pos"])
         contact_bonus = np.sum(obs["contact_hist"]) * 0.01
         action_penalty = 0.001 * np.sum(action ** 2)
+        
+        goal_reached_bonus = 10000 if np.linalg.norm(obs["goal_rel_pos"]) < 0.02 else 0
 
-        return -dist + contact_bonus - action_penalty
+        return -dist + contact_bonus - action_penalty + goal_reached_bonus
 
     def is_terminal(self, obs):
         return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
 
     def reset_model(self):
         self.set_state(self.init_qpos, self.init_qvel)
-
-        # Randomize goal
-        self.goal_pos = np.array([
-            random.uniform(0.3, 0.6),
-            random.uniform(-0.2, 0.2),
-        ])
-
+        self.goal_pos = self._get_new_goal()
         return self.get_state()
 
     def step(self, action: np.ndarray):

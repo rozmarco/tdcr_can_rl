@@ -13,7 +13,8 @@ class QNetwork(nn.Module):
         d_embedding: int = 32,
         d_hidden: int = 64,
         d_state: int = 64,
-        num_blocks: int = 3
+        num_blocks: int = 3,
+        **kwargs
     ):
         super(QNetwork, self).__init__()
         self.encoder = RobotFeatureEncoder(r_dim, d_embedding, d_hidden, d_state, num_blocks)

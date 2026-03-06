@@ -39,6 +39,21 @@ def save_checkpoint(it, models):
         if not os.path.exists(path):
             torch.save(model.state_dict(), path)
 
+def load_checkpoint(network, checkpoint_path):
+    if checkpoint_path.strip().lower() in ["none", ""]:
+        print(f"\033[93m No weights requested.\033[0m")
+        return
+    
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = PROJECT_ROOT_ / checkpoint_path
+
+    if not checkpoint_path.exists():
+        print(f"\033[93m Could not find checkpoint: {checkpoint_path}.\033[0m")
+        return
+
+    network.load_state_dict(torch.load(checkpoint_path, weights_only=True))
+
 
 if __name__ == '__main__':
     PROJECT_ROOT_ = Path(__file__).parent.resolve()
@@ -61,7 +76,6 @@ if __name__ == '__main__':
         action_dim=action_dim,
         **config['model']["policy"]
     )
-
     q_network1 = QNetwork(
         r_dim=r_dim,
         action_dim=action_dim,
@@ -72,6 +86,10 @@ if __name__ == '__main__':
         action_dim=action_dim,
         **config["model"]["q_network"]
     )
+
+    load_checkpoint(policy_network, config["model"]["policy"]["checkpoint"])
+    load_checkpoint(q_network1, config["model"]["q_network"]["checkpoint"])
+    load_checkpoint(q_network2, config["model"]["q_network"]["checkpoint"])
 
     buffer = ReplayBuffer(
         max_size=config["buffer"]["max_size"],
@@ -104,31 +122,39 @@ if __name__ == '__main__':
     batch_size = config["agent"]["batch_size"]
 
     # ----- TRAINING -----
+    os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
     ray.init(ignore_reinit_error=True)
 
-    for epoch in tqdm(range(config['epochs']), desc="Training Epochs"):
+    for epoch in range(config['epochs']):
         
         # Run environment
         if config['env']['run_env']:
             with torch.no_grad():
                 policy_network.eval()
                 results = run_environment(ParallelEnvRunner)
-                tqdm.write(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
+                print(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
 
         # Load buffer
         buffer.clear()
         npz_files = get_sorted_npz()
         buffer.load(npz_files)
-        tqdm.write(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
+        print(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
 
         # Training loop
-        for iteration in count():
+        pbar = tqdm(desc="Training", unit="iter", leave=False)
+
+        for iteration in count(): # Iteration does not reset to 0
             if not buffer.can_sample(batch_size):
                 break
 
             sac.update()
+            pbar.update(1)
 
             if iteration % checkpoint == 0:
                 save_checkpoint(iteration, models_to_save)
+
+        pbar.close()
+        print(f"\033[92mFinished SAC training.\033[0m")
+        print(f"\033[92mFinished Epoch: {epoch+1}\033[0m")
 
     save_checkpoint(iteration, models_to_save)

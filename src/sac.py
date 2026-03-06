@@ -30,10 +30,7 @@ class SoftActorCritic(nn.Module):
         device: torch.device = "cpu",
     ):
         super(SoftActorCritic, self).__init__()
-        
-        self.policy = policy.to(device)
-        self.q1 = q1.to(device)
-        self.q2 = q2.to(device)
+
         self.horizon = horizon
         self.batch_size = batch_size
         self.gamma = gamma
@@ -41,6 +38,10 @@ class SoftActorCritic(nn.Module):
         self.alpha = alpha
         self.device = device
         self.seed = seed
+
+        self.policy = policy.to(device)
+        self.q1 = q1.to(device)
+        self.q2 = q2.to(device)
 
         self.q1_target = copy.deepcopy(q1)
         self.q2_target = copy.deepcopy(q2)

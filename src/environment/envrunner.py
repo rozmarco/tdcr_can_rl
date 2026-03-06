@@ -1,13 +1,13 @@
 import time
 import uuid
+
 import numpy as np
+import torch
+import ray
 
 import mujoco
 from gymnasium.wrappers import TimeLimit
 from stable_baselines3.common.monitor import Monitor
-
-import torch
-import torch.nn as nn
 
 from pathlib import Path
 from typing import Dict
@@ -25,7 +25,7 @@ class EnvRunner:
         self, 
         is_train: bool,
         scene_path: str,
-        policy: nn.Module,
+        policy: torch.nn.Module,
         horizon: int = 1,
         num_episodes: int = 1,
         max_steps: int = 25000,
@@ -80,9 +80,11 @@ class EnvRunner:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
+        self.monitor_file = self.logs_dir / f"monitor_{id(self)}.csv"
+
         self.env = CustomEnv(scene_path, render_mode, frame_skips, timestep)
         self.env = TimeLimit(self.env, max_episode_steps=self.max_steps)
-        self.env = Monitor(self.env, filename=str(self.logs_dir / f"monitor_{id(self)}.csv"))
+        self.env = Monitor(self.env, filename=str(self.monitor_file))
 
     def _get_action(self, state: Dict) -> np.ndarray:
         r_state = flatten_state(state, self.device).view(1, 1, -1)
@@ -122,13 +124,13 @@ class EnvRunner:
                 # Skip add for step 1 because of state type mismatch
                 if self.is_train and step_count >= 1:
                     self.buffer.add(state, action, reward, next_state, done)
+
                 step_count += 1
 
                 state = next_state
                 self.env.render()
 
             self._save_buffer()
-            self.env.reset()
 
     def run_session(self):
         try:
@@ -151,9 +153,6 @@ class EnvRunner:
 
         finally:
             self.env.close()
-
-
-import ray
 
 @ray.remote
 class ParallelEnvRunner(EnvRunner):

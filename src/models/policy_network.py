@@ -45,10 +45,11 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         num_blocks: int = 3,
         num_blocks_dec: int = 5,
         diffusion_steps: int = 30,
-        max_period: float = 10000.0
+        max_period: float = 10000.0,
+        **kwargs
     ):
         super(LatentDiffusionPolicyPlanner, self).__init__()
-       
+
         # --- ENCODER ---
         self.encoder = RobotFeatureEncoder(
             r_dim,

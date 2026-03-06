@@ -1,12 +1,13 @@
 """
 Usage:
-    python plot_metrics.py --reward ./logs/monitor --name sac_run1
+    python plot_metrics.py --reward ./logs/monitor.csv --name sac_run1
 
 Description:
     Plot functions register themselves using @plot_metric("name").
     Each decorator automatically creates a CLI flag (--reward, etc.).
     Data is loaded from Stable-Baselines monitor logs.
 """
+
 
 import os
 import argparse
@@ -15,9 +16,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
-from stable_baselines3.common.monitor import load_results
-from stable_baselines3.common.results_plotter import ts2xy
 
 
 # Define project root

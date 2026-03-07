@@ -99,7 +99,7 @@ class EnvRunner:
         return action
     
     def _save_buffer(self):
-        filename = f"{self.data_dir}/{str(uuid.uuid4())[:8]}_{time.strftime("%Y%m%d_%H%M")}"
+        filename = f"{self.data_dir}/{str(uuid.uuid4())[:8]}_{time.strftime('%Y%m%d_%H%M')}"
         if self.is_train:
             self.buffer.save(filename)
             self.buffer.clear()

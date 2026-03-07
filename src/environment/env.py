@@ -1,10 +1,42 @@
 import re
 import random
+import sys
+import importlib.util
+from pathlib import Path
 import numpy as np
 
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.mujoco import MujocoEnv
+
+# Add tdcr_sim_mujoco directory to path
+tdcr_sim_mujoco_path = Path(__file__).parent.parent.parent / "tdcr_sim_mujoco"
+if str(tdcr_sim_mujoco_path) not in sys.path:
+    sys.path.insert(0, str(tdcr_sim_mujoco_path))
+
+# Pre-load tdcr_kinematics package into sys.modules so that relative imports work
+tdcr_kinematics_path = tdcr_sim_mujoco_path / "src" / "tdcr_kinematics"
+if "src.tdcr_kinematics" not in sys.modules:
+    # Load the __init__ file
+    init_path = tdcr_kinematics_path / "__init__.py"
+    spec = importlib.util.spec_from_file_location("src.tdcr_kinematics", init_path)
+    tdcr_kinematics_pkg = importlib.util.module_from_spec(spec)
+    sys.modules["src.tdcr_kinematics"] = tdcr_kinematics_pkg
+    spec.loader.exec_module(tdcr_kinematics_pkg)
+
+# Now import linear base controller directly
+linear_base_module_path = tdcr_sim_mujoco_path / "src" / "controllers" / "linear_base_controller.py"
+spec = importlib.util.spec_from_file_location("linear_base_controller", linear_base_module_path)
+linear_base_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(linear_base_module)
+LinearBaseStiffnessController = linear_base_module.LinearBaseStiffnessController
+
+# Now import TDCR joint controller (should work now that tdcr_kinematics is in sys.modules)
+tdcr_joint_module_path = tdcr_sim_mujoco_path / "src" / "controllers" / "tdcr_joint_controller.py"
+spec = importlib.util.spec_from_file_location("tdcr_joint_controller", tdcr_joint_module_path)
+tdcr_joint_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tdcr_joint_module)
+TDCRJointController = tdcr_joint_module.TDCRJointController
 
 
 class CustomEnv(MujocoEnv):
@@ -65,15 +97,39 @@ class CustomEnv(MujocoEnv):
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(2,),   # planar bend + extension
+            shape=(2,),   # bend_x, extension_delta (planar system)
             dtype=np.float32
+        )
+
+        # Initialize linear base controller
+        self.linear_base_ctrl = LinearBaseStiffnessController(
+            self.model, self.data, inside_stiffness=50.0
+        )
+        # Run initial stiffness update
+        self.linear_base_ctrl.update_stiffness()
+
+        # Initialize TDCR joint controller for Clark coordinate control
+        self.tdcr_controller = TDCRJointController(
+            self.model, self.data, clark_speed_scale=0.001, fps=100
         )
 
         self.model.opt.timestep = timstep # Set discretization to 2ms (500Hz).
 
     def _cache_ids(self):
         """Cache IDs so we don't string-search every step."""
-        self.tip_body_id = self.model.body("tdcr_tip").id
+        # Try different possible end-effector names
+        possible_tip_names = ["tdcr_tip", "EE_pos", "ee_pos", "end_effector"]
+        self.tip_body_id = None
+        for name in possible_tip_names:
+            try:
+                self.tip_body_id = self.model.body(name).id
+                break
+            except KeyError:
+                continue
+        
+        if self.tip_body_id is None:
+            # If no tip found, use the last link
+            self.tip_body_id = self.model.body("link_25").id if "link_25" in [self.model.body(i).name for i in range(self.model.nbody)] else self.model.body("link_0").id
 
         self.link_body_ids = [
             i for i in range(self.model.nbody)
@@ -180,11 +236,8 @@ class CustomEnv(MujocoEnv):
         return hist.astype(np.float32)
     
     def _get_extension(self):
-        qpos = [
-            self.data.qpos[self.model.jnt_qposadr[j]]
-            for j in self.linear_jnt_ids
-        ]
-        return float(np.mean(qpos))
+        # Use linear base controller's slide position
+        return self.linear_base_ctrl.get_slide_position()
     
     def _compute_obstacle_pos(self):
         tip_pos = self.data.xpos[self.tip_body_id][:2]
@@ -301,20 +354,31 @@ class CustomEnv(MujocoEnv):
     def step(self, action: np.ndarray):
         """
         Action:
-        [Δtendon1, Δtendon2, Δextension]
+        [bend_x, extension_delta] (planar system using Clark coordinates)
         """
-        # Clip action
-        # action = np.clip(action, -1.0, 1.0) # Moved into policy network
-        
-        # Apply Tendons and Extension differences
-        bending_delta = action[0]
-        extension_delta = action[1]
+        bend_x, extension_delta = action
 
-        # Map bending to tendon actuator IDs
-        self.data.ctrl[self.planar_tendon_ids] += bending_delta
+        # Create command for TDCR controller (Clark coordinates)
+        command = {
+            "x": bend_x,  # Left/right bending (Clark x-coordinate)
+            "y": 0.0,     # No vertical bending (planar system)
+            "segment": 0, # Control first segment
+            "reset_home": False,
+            "linear_base_delta": extension_delta  # For compatibility, but we handle extension separately
+        }
 
-        # Map extension
-        self.data.ctrl[self.linear_actuator_ids] += extension_delta
+        # Get target tendon positions from TDCR controller
+        tendon_targets = self.tdcr_controller.compute_target_qpos(command, self.data)
+
+        # Apply tendon targets
+        self.data.ctrl[self.tdcr_controller.tendon_actuator_ids] = tendon_targets[self.tdcr_controller.tendon_actuator_ids]
+
+        # Handle extension via linear base controller
+        lb_speed = 0.002  # Same as in teleop config
+        if abs(extension_delta) > 0.01:
+            new_target = self.linear_base_ctrl.get_slide_target() + extension_delta * lb_speed
+            self.linear_base_ctrl.set_slide_target(new_target)
+        self.linear_base_ctrl.update_stiffness()
 
         self.do_simulation(self.data.ctrl, self.frame_skip)
         

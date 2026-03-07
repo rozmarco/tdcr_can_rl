@@ -1,6 +1,6 @@
-scene: "assets/ftdcr_v6_tension.xml"
+scene: "/home/rozilyn/tdcr_can_rl/tdcr_sim_mujoco/assets/tdcr/tdcr_linear_base.xml"
 
-epochs: 15        # Number of training sessions
+epochs: 10        # Number of training sessions
 device: "cpu"     # Device to run training on ("cpu" or "cuda" or "mps")
 seed: 42          # Random seed for reproducibility
 
@@ -9,8 +9,8 @@ env:
   render: "rgb_array"   # Rendering mode ("rgb_array", "human")
   run_env: True         # Whether to actually run the environment (False = testing)
   num_episodes: 5       # Number of episodes to collect per session (run)
-  max_steps: 30000      # Maximum steps per episode before truncation.
-  num_workers: 2        # Number of parallel environment workers
+  max_steps: 10000      # Maximum steps per episode before truncation.
+  num_workers: 1        # Number of parallel environment workers
   frame_skips: 50
   timestep: 0.002
 
@@ -18,8 +18,8 @@ buffer:
   max_size: 1000000     # Suggestion: max_size > num_episodes * max_steps * num_workers
 
 agent:
-  r_dim: 40
-  action_dim: 3
+  r_dim: 32
+  action_dim: 2
   optimizer: 
     _target_: "AdamW"
     betas: [0.9, 0.999]

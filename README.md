@@ -42,6 +42,8 @@ project-name/
 
 ## ⚙️ Installation
 
+> Compatibility: Tested with Python 3.13 on macOS.
+
 ### 1️⃣ Clone the repository
 
 ```bash
@@ -83,7 +85,7 @@ python evaluate.py --checkpoint checkpoints/model.pt
 ### 🔹 Inference
 
 ```bash
-python predict.py --input sample.json
+python main.py
 ```
 
 ---
@@ -92,7 +94,6 @@ python predict.py --input sample.json
 
 - **Type:** (CNN / Transformer / SAC / etc.)
 - **Framework:** (PyTorch)
-- **Loss Function:**  (MSE)
 - **Optimizer:**  (AdamW)
 - **Key Hyperparameters:**
   - Learning rate:

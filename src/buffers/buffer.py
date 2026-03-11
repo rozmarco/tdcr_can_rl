@@ -86,13 +86,12 @@ class ReplayBuffer(BaseReplayBuffer):
 
         Returns:
             tuple: A tuple containing (states, actions, rewards, next_states, dones).
-                Each element is a NumPy array of shape (batch_size, horizon, dim).
         """
+        assert horizon >= 1, "Horizon must be at least 1"
+        assert batch_size > 0, "Batch size must be positive"
+
         s_batch, a_batch, r_batch, ns_batch, d_batch = [], [], [], [], []
 
-        if horizon < 1 or self.size < horizon:
-            return s_batch, a_batch, r_batch, ns_batch, d_batch
-        
         # Sample for indices (Without Replacement)
         indices = self.sampler.sample(batch_size, self.size - horizon + 1)
         self.samples_consumed += len(indices)
@@ -132,11 +131,12 @@ class ReplayBuffer(BaseReplayBuffer):
         # self.reward.fill(0)
         # self.done.fill(0)
         
-    def can_sample(self, batch_size):
+    def can_sample(self, horizon: int) -> bool:
         """
-        Checks if there is enough data left to form a batch.
+        Checks if there is enough data left for sampling.
         """
-        return (self.size - self.samples_consumed) >= batch_size
+        remaining_samples = self.size - self.samples_consumed - horizon + 1
+        return remaining_samples > 0 or self.sampler.can_sample() # Both should be simul true/false
 
     def save(self, file_path: str):
         """

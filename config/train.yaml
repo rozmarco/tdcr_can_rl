@@ -1,21 +1,21 @@
 scene: "assets/ftdcr_v6_tension.xml"
 
-epochs: 1        # Number of training sessions
+epochs: 1         # Number of training sessions
 device: "cpu"     # Device to run training on ("cpu" or "cuda" or "mps")
 seed: 42          # Random seed for reproducibility
 
 env:
   name: "tdcr-v1"       # Name or ID of the environment
-  render: "human"   # Rendering mode ("rgb_array", "human")
+  render: "human"     # Rendering mode ("rgb_array", "human")
   run_env: True         # Whether to actually run the environment (False = testing)
-  num_episodes: 3       # Number of episodes to collect per session (run)
+  num_episodes: 2       # Number of episodes to collect per session (run)
   max_steps: 100      # Maximum steps per episode before truncation.
   num_workers: 2        # Number of parallel environment workers
   frame_skips: 50
   timestep: 0.002
 
 buffer:
-  max_size: 1000000     # Suggestion: max_size > num_episodes * max_steps * num_workers
+  max_size: 1000000    # Suggestion: max_size > num_episodes * max_steps * num_workers
 
 agent:
   r_dim: 40
@@ -30,8 +30,8 @@ agent:
   gamma: 0.99
   tau: 0.005
   alpha: 0.2
-  horizon: 30
-  checkpoint: 100 # buffer_size / batch_size = iterations
+  horizon: 60
+  checkpoint: 200 # buffer_size / batch_size = iterations
 
 model:
   policy:
@@ -41,13 +41,14 @@ model:
     d_latent: 16
     num_blocks: 3
     num_blocks_dec: 3
-    diffusion_steps: 15
-    max_period: 5000.0
-    checkpoint: None # ./checkpoints/policy_52.pth
+    diffusion_steps: 20
+    max_period: 500.0
+    checkpoint: None # ./checkpoints/policy_..._final.pth
   
   q_network:
     d_embedding: 16
     d_hidden: 16
     d_state: 8
     num_blocks: 3
-    checkpoint: None
+    checkpoint_q1: None # ./checkpoints/q1_..._final.pth
+    checkpoint_q2: None # ./checkpoints/q2_..._final.pth

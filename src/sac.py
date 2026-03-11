@@ -85,7 +85,7 @@ class SoftActorCritic(nn.Module):
 
         # --- Compute the Target Q-value ---
         with torch.no_grad():
-            next_action, next_log_pi = self.policy.rollout(s, self.horizon)
+            next_action, next_log_pi = self.policy.sample(s, self.horizon)
             
             # Use TARGET Q-networks for stability
             target_q1_next = self.q1_target(s_next, next_action)
@@ -113,7 +113,7 @@ class SoftActorCritic(nn.Module):
         
         # --- Update Policy (Reverse KL) ---
         # Use Q-networks here to tell the policy which way to move
-        curr_a, log_pi = self.policy.rollout(s, self.horizon)
+        curr_a, log_pi = self.policy(s, self.horizon)
         q1_pi = self.q1(s, curr_a)
         q2_pi = self.q2(s, curr_a)
         min_q_pi = torch.min(q1_pi, q2_pi)

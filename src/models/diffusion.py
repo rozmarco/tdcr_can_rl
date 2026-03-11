@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, Callable
+from typing import Union
 
 from .pe import SinusoidalPositionalEncoding
 
@@ -25,11 +25,6 @@ class DiffusionNetwork(nn.Module):
         self.diffusion_steps = diffusion_steps
 
         self.pe = SinusoidalPositionalEncoding(d_hidden, max_period)
-        self.time_embeddings = nn.Sequential(
-            nn.Linear(d_hidden, d_hidden * 2),
-            nn.GELU(),
-            nn.Linear(d_hidden * 2, d_hidden)
-        )
 
         self._init_schedule()
 
@@ -51,71 +46,79 @@ class DiffusionNetwork(nn.Module):
         self.register_buffer("alpha_bar", alpha_bar)
 
     def get_time_embedding(self, t):
-        t_raw = self.pe(t)
-        t_emb = self.time_embeddings(t_raw)
-        return t_emb
+        return self.pe(t)
 
-    def forward(self, z: torch.Tensor, target_action: torch.Tensor):
-        B = z.shape[0]
-        device = z.device
+    def forward(self, target):
+        B = target.shape[0]
+        device = target.device
 
         t = torch.randint(0, self.diffusion_steps, (B,), device=device)
-        noise = torch.randn_like(target_action)
+        noise = torch.randn_like(target)
 
         alpha_bar_t = self.alpha_bar[t]
         sqrt_ab = alpha_bar_t.sqrt().unsqueeze(-1).unsqueeze(-1)
         sqrt_one_minus_ab = (1.0 - alpha_bar_t).sqrt().unsqueeze(-1).unsqueeze(-1)
-        # print(sqrt_ab.shape, target_action.shape, sqrt_one_minus_ab.shape, noise.shape)
-        noisy_action = sqrt_ab * target_action + sqrt_one_minus_ab * noise
-
-        t_embed = self.get_time_embedding(t).unsqueeze(1)
-        conditioned = z + t_embed
-        predicted_noise = self.noise_predictor(noise, conditioned)
+        noisy_action = sqrt_ab * target + sqrt_one_minus_ab * noise
 
         return {
-            "predicted_noise": predicted_noise,
             "noisy_action": noisy_action,
             "target_noise": noise,
             "timestep": t
         }
+    
+    def reverse(
+        self, 
+        sequence: torch.Tensor, 
+        z: torch.Tensor, 
+        t: Union[int, torch.Tensor]
+    ) -> torch.Tensor:
+        """
+        """
+        # Reverse process: One-shot noise prediction
+        B = z.shape[0]
+        device = z.device
 
+        # Predict noise for the full sequence
+        if isinstance(t, int):
+            t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
+        else:
+            t_tensor = t
+
+        t_embed = self.get_time_embedding(t_tensor)
+        z_expanded = z + t_embed.unsqueeze(1)
+        predicted_noise = self.noise_predictor(sequence, z_expanded)
+
+        # Coefficients
+        alpha_t = self.alpha[t_tensor].view(B,1,1)
+        alpha_bar_t = self.alpha_bar[t_tensor].view(B,1,1)
+        beta_t = self.beta[t_tensor].view(B,1,1)
+
+        # DDPM update
+        sequence = (
+            (1 / torch.sqrt(alpha_t)) * 
+            (sequence - (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t) * predicted_noise)
+        )
+
+        # Add noise except for t = 0
+        mask = (t_tensor > 0).float().view(B,1,1)
+        sequence += mask * torch.sqrt(beta_t) * torch.randn_like(sequence)
+
+        return sequence
+
+    @torch.no_grad()
     def sample(
         self, 
         z: torch.Tensor, 
-        horizon: int = 1, 
-        guide_fn: Optional[Callable] = None,
-        scale: float = 0.1
+        horizon: int = 1
     ) -> torch.Tensor:
-        
+        """
+        """
         B = z.shape[0]
         device = z.device
+
         sequence = torch.randn(B, horizon, self.action_dim, device=device)
 
         for t in reversed(range(self.diffusion_steps)):
-            # Predict noise for the full sequence
-            t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
-            t_embed = self.get_time_embedding(t_tensor)
-            z_expanded = z + t_embed.unsqueeze(1)
-            predicted_noise = self.noise_predictor(sequence, z_expanded)
-
-            # Classifier Guidance
-            if guide_fn is not None:
-                with torch.enable_grad():
-                    sequence.requires_grad_(True)
-                    # The guide_fn should return a scalar (like 'distance to obstacle')
-                    loss = guide_fn(sequence)
-                    grad = torch.autograd.grad(loss, sequence)[0]
-                    sequence.requires_grad_(False)
-                predicted_noise = predicted_noise + scale * grad
-
-            # DDPM update
-            alpha_t = self.alpha[t]
-            alpha_bar_t = self.alpha_bar[t]
-            beta_t = self.beta[t]
-
-            sequence = (1 / torch.sqrt(alpha_t)) * (sequence - (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t) * predicted_noise)
-
-            if t > 0:
-                sequence += torch.sqrt(beta_t) * torch.randn_like(sequence)
+            sequence = self.reverse(sequence, z, t)
 
         return sequence

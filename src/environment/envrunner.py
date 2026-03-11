@@ -89,7 +89,7 @@ class EnvRunner:
     def _get_action(self, state: Dict) -> np.ndarray:
         r_state = flatten_state(state, self.device).view(1, 1, -1)
 
-        plan, _ = self.policy.rollout(r_state, self.horizon)
+        plan, _ = self.policy.sample(r_state, self.horizon)
         plan = plan.detach().cpu().numpy().squeeze() # [Horizon, A_dim]
 
         # Receding horizon

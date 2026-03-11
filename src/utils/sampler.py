@@ -23,6 +23,9 @@ class NumpySampler:
         self.indices = np.array([], dtype=int)
         self._initialized = False
 
+    def can_sample(self) -> bool:
+        return len(self.indices) > 0
+
     def sample(self, batch_size: int, size: int) -> np.ndarray:
         """
         Random sampling without replacement.
@@ -35,7 +38,7 @@ class NumpySampler:
 
         # EXHAUSTION CHECK
         if len(self.indices) == 0:
-            return np.array([], dtype=int)     
+            return np.array([], dtype=int)
 
         # SAMPLE: Take what is available
         actual_batch = min(batch_size, len(self.indices))

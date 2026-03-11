@@ -3,6 +3,7 @@ import yaml
 
 import ray
 import torch
+import random
 import numpy as np
 
 from tqdm import tqdm
@@ -17,6 +18,17 @@ from src.sac import SoftActorCritic
 
 from tdcr_sim_mujoco.src.utils.config_loader import PROJECT_ROOT
 
+
+def set_seed(seed: int=42):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 def run_environment(env):
     workers = [env.remote(True, scene_path, policy_network, config) 
@@ -41,7 +53,7 @@ def save_checkpoint(it, models):
 
 def load_checkpoint(network, checkpoint_path):
     if checkpoint_path.strip().lower() in ["none", ""]:
-        print(f"\033[93m No weights requested.\033[0m")
+        print(f"\033[93mNo weights requested for {type(network).__name__}.\033[0m")
         return
     
     checkpoint_path = Path(checkpoint_path)
@@ -49,7 +61,7 @@ def load_checkpoint(network, checkpoint_path):
         checkpoint_path = PROJECT_ROOT_ / checkpoint_path
 
     if not checkpoint_path.exists():
-        print(f"\033[93m Could not find checkpoint: {checkpoint_path}.\033[0m")
+        print(f"\033[93mCould not find checkpoint: {checkpoint_path}.\033[0m")
         return
 
     network.load_state_dict(torch.load(checkpoint_path, weights_only=True))
@@ -65,8 +77,7 @@ if __name__ == '__main__':
         config = yaml.safe_load(f)
 
     # ----- INITIALIZATION -----
-    torch.manual_seed(config["seed"])
-    np.random.seed(config["seed"])
+    set_seed(config["seed"])
 
     r_dim = config["agent"]["r_dim"]
     action_dim = config["agent"]["action_dim"]
@@ -88,8 +99,12 @@ if __name__ == '__main__':
     )
 
     load_checkpoint(policy_network, config["model"]["policy"]["checkpoint"])
-    load_checkpoint(q_network1, config["model"]["q_network"]["checkpoint"])
-    load_checkpoint(q_network2, config["model"]["q_network"]["checkpoint"])
+    load_checkpoint(q_network1, config["model"]["q_network"]["checkpoint_q1"])
+    load_checkpoint(q_network2, config["model"]["q_network"]["checkpoint_q2"])
+
+    for net in [policy_network, q_network1, q_network2]:
+        n_param = sum(p.numel() for p in net.parameters())
+        print(f"\033[92mInitialized {type(net).__name__} with {n_param} parameters.\033[0m")
 
     buffer = ReplayBuffer(
         max_size=config["buffer"]["max_size"],
@@ -144,7 +159,7 @@ if __name__ == '__main__':
         pbar = tqdm(desc="Training", unit="iter", leave=False)
 
         for iteration in count(): # Iteration does not reset to 0
-            if not buffer.can_sample(batch_size):
+            if not buffer.can_sample(horizon=config["agent"]["horizon"]):
                 break
 
             sac.update()
@@ -157,4 +172,4 @@ if __name__ == '__main__':
         print(f"\033[92mFinished SAC training.\033[0m")
         print(f"\033[92mFinished Epoch: {epoch+1}\033[0m")
 
-    save_checkpoint(iteration, models_to_save)
+    save_checkpoint(f"{iteration}_final", models_to_save)

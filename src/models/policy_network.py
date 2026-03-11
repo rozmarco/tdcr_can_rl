@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, Callable
-
 from .encoder import RobotFeatureEncoder
 from .latent import LatentHead
 from .decoder import NoisePredictor
@@ -49,6 +47,7 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         **kwargs
     ):
         super(LatentDiffusionPolicyPlanner, self).__init__()
+        self.action_dim = action_dim
 
         # --- ENCODER ---
         self.encoder = RobotFeatureEncoder(
@@ -79,7 +78,7 @@ class LatentDiffusionPolicyPlanner(nn.Module):
 
     def log_pi(self, actions, z):
         # Run the diffusion forward
-        output = self.diffusion(z, actions)
+        output = self.diffusion(actions)
         noisy_action = output["noisy_action"]        # [B, H, d_a]
         target_noise = output["target_noise"]        # [B, H, d_a]
         t = output["timestep"]                       # [B]
@@ -92,32 +91,63 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         # Compute log probability under unit Gaussian
         # log N(x | mu, sigma=1) = -0.5 * (x - mu)^2 - 0.5 * log(2*pi)
         log_prob_per_dim = -0.5 * (target_noise - predicted_noise)**2 - 0.5 * math.log(2*math.pi)
+        
         # Sum over action dimensions and timesteps
         log_pi = log_prob_per_dim.sum(dim=(-1))  # sum over d_a for log-prob per timestep.
 
         return log_pi  # [B]
     
-    def rollout(
+    def forward(
         self, 
         x: torch.Tensor, 
-        horizon: int = 1,
-        guide_fn: Optional[Callable] = None,
-        scale: float = 0.1
+        horizon: int = 1
+    ) -> torch.Tensor:
+        """
+        Perform a single-step reverse diffusion update for training the policy.
+
+        Args:
+            x (torch.Tensor): Current robot observation/state. Shape: [Batch, Features].
+            horizon (int): Number of timesteps to rollout.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: 
+                - actions (torch.Tensor): Tensor of shape [Batch, Horizon, Action_dim] containing
+                the predicted actions after applying tanh.
+                - log_pi (torch.Tensor): Tensor of shape [Batch, Horizon] (or compatible) representing
+                the log-probabilities of the predicted actions under the policy.
+        """
+        fused = self.encoder(x)
+        z, mu, std = self.latent(fused)
+
+        B = z.shape[0]
+        device = z.device
+        t = torch.randint(0, self.diffusion.diffusion_steps, (B,), device=device, dtype=torch.long)
+        sequence = torch.randn(B, horizon, self.action_dim, device=device)
+        plan = self.diffusion.reverse(sequence, z, t)
+
+        return F.tanh(plan), self.log_pi(plan, z)
+    
+    @torch.no_grad()
+    def sample(
+        self, 
+        x: torch.Tensor, 
+        horizon: int = 1
     ) -> torch.Tensor:
         """
         Perform a multi-step rollout of the policy over a given horizon.
 
         Args:
             x (torch.Tensor): Current robot observation/state. Shape: [Batch, Features].
-            graph (torch.Tensor): Graph or spatial context input. Can be static if obstacles are static.
             horizon (int): Number of timesteps to rollout.
 
         Returns:
-            torch.Tensor: Tensor of shape [Batch, Horizon, Action_dim] containing
-                            the predicted actions for each timestep.
+            tuple[torch.Tensor, torch.Tensor]: 
+                - actions (torch.Tensor): Tensor of shape [Batch, Horizon, Action_dim] containing
+                the predicted actions after applying tanh.
+                - log_pi (torch.Tensor): Tensor of shape [Batch, Horizon] (or compatible) representing
+                the log-probabilities of the predicted actions under the policy.
         """
         fused = self.encoder(x)
         z, mu, std = self.latent(fused)
-        plan = self.diffusion.sample(z, horizon, guide_fn, scale)
-        log_pi = self.log_pi(plan, z)
-        return F.tanh(plan), log_pi
+        plan = self.diffusion.sample(z, horizon)
+        return F.tanh(plan), self.log_pi(plan, z)

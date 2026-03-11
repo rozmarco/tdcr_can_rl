@@ -86,14 +86,6 @@ def get_scene_info(model, scene_path):
 
 
 if __name__ == "__main__":
-    # ----- YAML CONFIGURATION -----
-    PROJECT_ROOT_ = Path(__file__).parent.resolve()
-
-    config_file = Path(PROJECT_ROOT_ / "config" / "main.yaml")
-
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
-
     # ----- SCENE METADATA ------
     scene_path = Path(DEFAULT_CONFIG["scene"])
     
@@ -119,20 +111,22 @@ if __name__ == "__main__":
     # ----- SETUP POLICY AND ENVIRONMENT -----
     torch.manual_seed(0)
 
-    with torch.no_grad():
-        # TODO: Hardcoded.
-        state_dim = 40
-        action_dim = 3
+    # Hardcoded.
+    state_dim = 40
+    action_dim = 3
+    horizon = 30
+    render_mode = "human"
 
+    with torch.no_grad():
         policy = LatentDiffusionPolicyPlanner(state_dim, action_dim)
         policy.eval()
 
-        my_file = Path("checkpoints/tdcr_policy_v1.pth")
+        my_file = Path("checkpoints/tdcr_policy_v1.pth") # Hardcoded.
         if my_file.is_file():
             torch.load(policy.state_dict(), str(my_file), weights_only=True)
         else:
             print(f"No weights found, initializing random weights.")
 
         # Run environment with policy
-        env = EnvRunner(False, scene_path, policy, horizon=30, render_mode="human")
+        env = EnvRunner(False, scene_path, policy, horizon=horizon, render_mode=render_mode)
         env.run_session()

@@ -71,32 +71,27 @@ def plot_reward(path, run_name):
         steps,
         avg_return - std_return,
         avg_return + std_return,
-        color="blue",
+        color="#64b5eb",
         alpha=0.2,
-        label="Std deviation",
+        # label="Std deviation",
     )
 
     plt.plot(
         steps,
         avg_return,
-        color="blue",
-        label="Average Return",
-        linewidth=1,      # thickness of the line
-        marker='o',       # shape of the points ('o', 's', '^', '*', etc.)
-        markersize=3,     # size of the dots
-        markeredgewidth=1,       # thickness of dot edge
-        markeredgecolor='black'  # color of the dot edge
+        color="#64b5eb",
+        label="SAC",
+        linewidth=1.5,
+        linestyle='-'
     )
 
-    plt.grid(which="major", linestyle="--", alpha=0.6)
-    plt.grid(which="minor", linestyle=":", alpha=0.3)
-    plt.minorticks_on()
-    plt.gca().set_facecolor("#f0f0f0")
+    plt.grid(which="major", linestyle="-", alpha=0.5)
+    plt.gca().set_facecolor("#f0f7fb")
 
     plt.xlabel("Steps", fontsize=12)
     plt.ylabel("Average Return", fontsize=12)
-    plt.title("SAC Training Performance", fontsize=14)
-    plt.legend()
+    plt.title("TDCR-Agent", fontsize=14)
+    plt.legend(frameon=False, fontsize=11)
 
     save_path = os.path.join("results", f"{run_name}_reward.png")
     plt.savefig(save_path, dpi=300, bbox_inches="tight")

@@ -11,7 +11,7 @@ from pathlib import Path
 from itertools import count
 
 from src.environment.envrunner import EnvRunner, ParallelEnvRunner
-from src.models.policy_network import LatentDiffusionPolicyPlanner
+from src.models.policy_network import LatentPolicyPlanner
 from src.models.q_network import QNetwork
 from src.buffers.buffer import ReplayBuffer
 from src.sac import SoftActorCritic
@@ -30,9 +30,9 @@ def set_seed(seed: int=42):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-def run_environment(env):
-    workers = [env.remote(True, scene_path, policy_network, config) 
-                for _ in range(config['env']['num_workers'])]
+def run_environment(env, loc):
+    workers = [env.remote(i, True, scene_path, policy_network, config, loc) 
+                for i in range(config['env']['num_workers'])]
     future_results = [w.run_session_remote.remote() for w in workers]
     results = ray.get(future_results)
     return results
@@ -64,11 +64,12 @@ def load_checkpoint(network, checkpoint_path):
         print(f"\033[93mCould not find checkpoint: {checkpoint_path}.\033[0m")
         return
 
-    network.load_state_dict(torch.load(checkpoint_path, weights_only=True))
+    network.load_state_dict(torch.load(checkpoint_path, weights_only=True), strict=False)
 
 
 if __name__ == '__main__':
     PROJECT_ROOT_ = Path(__file__).parent.resolve()
+
 
     # ----- YAML CONFIGURATION -----
     config_file = Path(PROJECT_ROOT_ / "config" / "train.yaml")
@@ -76,13 +77,14 @@ if __name__ == '__main__':
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
 
+
     # ----- INITIALIZATION -----
     set_seed(config["seed"])
 
     r_dim = config["agent"]["r_dim"]
     action_dim = config["agent"]["action_dim"]
 
-    policy_network = LatentDiffusionPolicyPlanner(
+    policy_network = LatentPolicyPlanner(
         r_dim=r_dim,
         action_dim=action_dim,
         **config['model']["policy"]
@@ -103,7 +105,7 @@ if __name__ == '__main__':
     load_checkpoint(q_network2, config["model"]["q_network"]["checkpoint_q2"])
 
     for net in [policy_network, q_network1, q_network2]:
-        n_param = sum(p.numel() for p in net.parameters())
+        n_param = sum(p.numel() for p in net.parameters() if p.requires_grad)
         print(f"\033[92mInitialized {type(net).__name__} with {n_param} parameters.\033[0m")
 
     buffer = ReplayBuffer(
@@ -135,41 +137,40 @@ if __name__ == '__main__':
     models_to_save = {"policy": policy_network, "q1": q_network1, "q2": q_network2}
     checkpoint = config['agent']['checkpoint']
     batch_size = config["agent"]["batch_size"]
+    total_epochs = config['epochs']
+
 
     # ----- TRAINING -----
     os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
     ray.init(ignore_reinit_error=True)
 
-    for epoch in range(config['epochs']):
-        
-        # Run environment
-        if config['env']['run_env']:
-            with torch.no_grad():
-                policy_network.eval()
-                results = run_environment(ParallelEnvRunner)
-                print(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
+    for epoch in tqdm(range(total_epochs), desc="Epochs", leave=True):
 
-        # Load buffer
+        # Run Environment (Simulate)
+        if config['env']['run_env']:
+            policy_network.eval()
+            with torch.no_grad():
+                results = run_environment(ParallelEnvRunner, loc=f"run_{epoch}") # loc = 'logs/run_0' folder name
+            tqdm.write(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
+
+        # Load Buffer
         buffer.clear()
         npz_files = get_sorted_npz()
         buffer.load(npz_files)
-        print(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
+        tqdm.write(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
 
-        # Training loop
-        pbar = tqdm(desc="Training", unit="iter", leave=False)
+        # Run Training
+        with tqdm(desc="Training Iteration", leave=False) as pbar:
+            for iteration in count(): # Iteration does not reset to 0
+                if not buffer.can_sample(horizon=config["agent"]["horizon"]):
+                    break
 
-        for iteration in count(): # Iteration does not reset to 0
-            if not buffer.can_sample(horizon=config["agent"]["horizon"]):
-                break
+                sac.update()
 
-            sac.update()
-            pbar.update(1)
+                if iteration % checkpoint == 0:
+                    save_checkpoint(iteration, models_to_save)
 
-            if iteration % checkpoint == 0:
-                save_checkpoint(iteration, models_to_save)
-
-        pbar.close()
-        print(f"\033[92mFinished SAC training.\033[0m")
-        print(f"\033[92mFinished Epoch: {epoch+1}\033[0m")
+                pbar.update(1)
+        tqdm.write(f"\033[92mFinished SAC training.\033[0m")
 
     save_checkpoint(f"{iteration}_final", models_to_save)

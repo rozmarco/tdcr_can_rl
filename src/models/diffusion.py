@@ -12,16 +12,16 @@ class DiffusionNetwork(nn.Module):
     """
     def __init__(
         self,
-        noise_predictor: nn.Module,
+        noise_predictor,
         d_hidden: int,
-        action_dim: int,
+        output_dim: int,
         diffusion_steps: int = 30,
-        max_period: float = 10000.0
+        max_period: float = 1000.0
     ):
         super(DiffusionNetwork, self).__init__()
 
         self.noise_predictor = noise_predictor
-        self.action_dim = action_dim
+        self.output_dim = output_dim
         self.diffusion_steps = diffusion_steps
 
         self.pe = SinusoidalPositionalEncoding(d_hidden, max_period)
@@ -58,10 +58,10 @@ class DiffusionNetwork(nn.Module):
         alpha_bar_t = self.alpha_bar[t]
         sqrt_ab = alpha_bar_t.sqrt().unsqueeze(-1).unsqueeze(-1)
         sqrt_one_minus_ab = (1.0 - alpha_bar_t).sqrt().unsqueeze(-1).unsqueeze(-1)
-        noisy_action = sqrt_ab * target + sqrt_one_minus_ab * noise
+        noisy_target = sqrt_ab * target + sqrt_one_minus_ab * noise
 
         return {
-            "noisy_action": noisy_action,
+            "noisy_target": noisy_target,
             "target_noise": noise,
             "timestep": t
         }
@@ -116,7 +116,7 @@ class DiffusionNetwork(nn.Module):
         B = z.shape[0]
         device = z.device
 
-        sequence = torch.randn(B, horizon, self.action_dim, device=device)
+        sequence = torch.randn((B, horizon, self.output_dim), device=device)
 
         for t in reversed(range(self.diffusion_steps)):
             sequence = self.reverse(sequence, z, t)

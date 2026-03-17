@@ -45,7 +45,7 @@ class MambaBlock(nn.Module):
         return out
 
 class MambaTransformerLayer(nn.Module):
-    def __init__(self, d_model: int, d_state: int):
+    def __init__(self, d_model: int, d_state: int, expand: int=2):
         super(MambaTransformerLayer, self).__init__()
 
         self.ln1 = nn.LayerNorm(d_model)
@@ -53,9 +53,9 @@ class MambaTransformerLayer(nn.Module):
 
         self.ln2 = nn.LayerNorm(d_model)
         self.ff = nn.Sequential(
-            nn.Linear(d_model, d_model*3),
+            nn.Linear(d_model, d_model * expand),
             nn.GELU(),
-            nn.Linear(d_model*3, d_model)
+            nn.Linear(d_model * expand, d_model)
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:

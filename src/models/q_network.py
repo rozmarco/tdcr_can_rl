@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .encoder import RobotFeatureEncoder
-from .decoder import NoisePredictor
+from .decoder import Decoder
 
 class QNetwork(nn.Module):
     def __init__(
@@ -17,25 +17,27 @@ class QNetwork(nn.Module):
         **kwargs
     ):
         super(QNetwork, self).__init__()
-        self.encoder = RobotFeatureEncoder(r_dim, d_embedding, d_hidden, d_state, num_blocks)
-        self.backbone = NoisePredictor(action_dim, d_hidden, d_state, num_blocks)
-        self.ff = nn.Linear(action_dim, 1)
 
-    def _get_discounted(self, r):
-        # Cumulative Discounted Reward
-        B, H, _ = r.shape
-
-        gamma = torch.tensor([0.99], device=r.device)
-        k = torch.arange(0, H, step=1, device=r.device)
-        weights = torch.pow(gamma, k).view(1, -1, 1) # [1, H, 1]
-
-        return (weights * r).sum(dim=-1) # [B, H, 1] -> [B, H]
+        self.encoder = RobotFeatureEncoder(
+            r_dim=r_dim, 
+            d_hidden=d_hidden,
+            d_embedding=d_embedding, 
+        )
+        self.decoder = Decoder(
+            input_dim=action_dim,
+            output_dim=d_hidden//2,
+            d_cond=d_embedding,
+            d_hidden=d_hidden,
+            d_state=d_state,
+            num_blocks=num_blocks
+        )
+        self.ff = nn.Linear(d_hidden//2, 1)
 
     def forward(self, s, a):
         # s: [Batch, Horizon, State]
         # a: [Batch, Horizon, Action]
         emb = self.encoder(s)
-        emb = self.backbone(a, emb)
-        out = self.ff(emb)
+        emb = self.decoder(a, emb)
+        r = self.ff(emb)
         # r: [Batch, Horizon, 1]
-        return self._get_discounted(out)
+        return r

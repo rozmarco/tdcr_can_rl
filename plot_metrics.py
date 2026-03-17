@@ -1,6 +1,6 @@
 """
 Usage:
-    python plot_metrics.py --reward ./logs/monitor.csv --name sac_run1
+    python plot_metrics.py --reward ./logs --name sac_run1
 
 Description:
     Plot functions register themselves using @plot_metric("name").
@@ -11,6 +11,7 @@ Description:
 
 import os
 import argparse
+import glob
 from pathlib import Path
 
 import numpy as np
@@ -45,55 +46,76 @@ def plot_reward(path, run_name):
 
     def load_monitor_rewards(path):
         """
-        Loads rewards from a Stable-Baselines monitor log.
-        Returns rewards grouped as [steps, runs] for plotting.
+        Returns a dict mapping worker_id → concatenated episode rewards across all runs.
+        Assumes CSVs are stored under run directories with worker ID in filename.
         """
-        df = pd.read_csv(path, skiprows=1)
+        run_dirs = sorted([d for d in os.listdir(path)])
+        worker_rewards = {}
 
-        rewards = df["r"].to_numpy()
-        lengths = df["l"].to_numpy()
+        for run in run_dirs:
+            run_path = os.path.join(path, run)
+            csvs = glob.glob(os.path.join(run_path, "*.csv"))
+            for csv in csvs:
+                df = pd.read_csv(csv, skiprows=1)
+                # extract worker id from filename (example: worker0_monitor.csv)
+                worker_id = os.path.basename(csv).split('_')[0]
+                if worker_id not in worker_rewards:
+                    worker_rewards[worker_id] = []
+                avg_reward = df["r"].mean()
+                worker_rewards[worker_id].append(avg_reward)  # concatenate across runs
 
-        steps = np.cumsum(lengths)
+        # Convert lists to arrays
+        for w in worker_rewards:
+            worker_rewards[w] = np.array(worker_rewards[w])
 
-        return steps, rewards
+        return worker_rewards
     
-    steps, rewards = load_monitor_rewards(path)
+    all_rewards = load_monitor_rewards(path)
 
-    # convert to shape (N,1) so mean/std logic works
-    rewards = rewards.reshape(-1, 1)
+    # Calculate the mean/std per run
+    worker_ids = sorted(all_rewards.keys())  # sort for consistent order
+    rewards_matrix = np.column_stack([all_rewards[w] for w in worker_ids])  # shape: (runs, workers)
+    avg_return = np.mean(rewards_matrix, axis=1)
+    std_return = np.std(rewards_matrix, axis=1)
 
-    avg_return = rewards.mean(axis=1)
-    std_return = rewards.std(axis=1)
+    plt.figure(figsize=(7,5))
 
-    plt.figure(figsize=(8, 5))
+    x_axis = np.arange(len(avg_return))
+
+    for i, w in enumerate(worker_ids):
+        plt.plot(
+            x_axis, 
+            rewards_matrix[:, i], 
+            linestyle=':', 
+            alpha=0.5
+        )
+
+    plt.plot(
+        x_axis,
+        avg_return,
+        color="#64b5eb",
+        label="SAC",
+        linewidth=2.0,
+        linestyle='-'
+    )
 
     plt.fill_between(
-        steps,
+        x_axis,
         avg_return - std_return,
         avg_return + std_return,
         color="#64b5eb",
         alpha=0.2,
-        # label="Std deviation",
-    )
-
-    plt.plot(
-        steps,
-        avg_return,
-        color="#64b5eb",
-        label="SAC",
-        linewidth=1.5,
-        linestyle='-'
     )
 
     plt.grid(which="major", linestyle="-", alpha=0.5)
     plt.gca().set_facecolor("#f0f7fb")
 
-    plt.xlabel("Steps", fontsize=12)
+    plt.xlabel("Number of Iterations", fontsize=12)
     plt.ylabel("Average Return", fontsize=12)
     plt.title("TDCR-Agent", fontsize=14)
     plt.legend(frameon=False, fontsize=11)
 
-    save_path = os.path.join("results", f"{run_name}_reward.png")
+    save_path = os.path.join("results", f"average_reward.png")
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
 
@@ -119,8 +141,6 @@ def main():
 
     args = parser.parse_args()
 
-    os.makedirs("results", exist_ok=True)
-
     for plot_name, plot_func in PLOT_REGISTRY.items():
         path = getattr(args, plot_name)
         resolved = resolve_path(path)
@@ -131,4 +151,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except TypeError:
+        print(f"TypeError: Missing required arguments")

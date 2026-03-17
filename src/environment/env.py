@@ -6,6 +6,10 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.mujoco import MujocoEnv
 
+from tdcr_sim_mujoco.src.controllers import (
+    LinearBaseStiffnessController, 
+    TDCRJointController
+)
 
 class CustomEnv(MujocoEnv):
     """
@@ -58,23 +62,45 @@ class CustomEnv(MujocoEnv):
         )
 
         self._cache_ids()
-        # self._print_init_state()
-
         self.goal_pos = np.array([0.5, 0.0], dtype=np.float32)
         self.base_pos = np.array([0.0, 0.0])
         self.max_reach = 0.5   # example — measure from model
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(2,),   # planar bend + extension
+            shape=(2,),   # bend_x, extension_delta (planar system)
             dtype=np.float32
+        )
+
+        # Initialize linear base controller
+        self.linear_base_ctrl = LinearBaseStiffnessController(
+            self.model, self.data, inside_stiffness=50.0
+        )
+        # Run initial stiffness update
+        self.linear_base_ctrl.update_stiffness()
+
+        # Initialize TDCR joint controller for Clark coordinate control
+        self.tdcr_controller = TDCRJointController(
+            self.model, self.data, clark_speed_scale=0.001, fps=100
         )
 
         self.model.opt.timestep = timstep # Set discretization to 2ms (500Hz).
 
     def _cache_ids(self):
         """Cache IDs so we don't string-search every step."""
-        self.tip_body_id = self.model.body("tdcr_tip").id
+        # Try different possible end-effector names
+        possible_tip_names = ["tdcr_tip", "EE_pos", "ee_pos", "end_effector"]
+        self.tip_body_id = None
+        for name in possible_tip_names:
+            try:
+                self.tip_body_id = self.model.body(name).id
+                break
+            except KeyError:
+                continue
+        
+        if self.tip_body_id is None:
+            # If no tip found, use the last link
+            self.tip_body_id = self.model.body("link_25").id if "link_25" in [self.model.body(i).name for i in range(self.model.nbody)] else self.model.body("link_0").id
 
         self.link_body_ids = [
             i for i in range(self.model.nbody)
@@ -92,24 +118,11 @@ class CustomEnv(MujocoEnv):
             if name is not None and "linear_" in name:
                 self.linear_jnt_ids.append(j)
 
-        # assert len(self.linear_jnt_ids) > 0 \
-
         self.linear_actuator_ids = []
         for a in range(self.model.nu):
             name = self.model.actuator(a).name
             if name is not None and "linear_" in name:
                 self.linear_actuator_ids.append(a)
-
-        # assert len(self.linear_actuator_ids) > 0 \
-
-        self.planar_tendon_ids = []
-        for a in range(self.model.nu):
-            name = self.model.actuator(a).name
-            if name is not None and "ten_" in name:
-                self.planar_tendon_ids.append(a)
-
-        assert len(self.planar_tendon_ids) > 0, \
-            f"No planar tendon sites found! Expected at least one, got {len(self.planar_tendon_ids)}."
 
         self.obstacle_body_name = [
             self.model.body(i).name for i in range(self.model.nbody)
@@ -194,11 +207,8 @@ class CustomEnv(MujocoEnv):
         return hist.astype(np.float32)
     
     def _get_extension(self):
-        qpos = [
-            self.data.qpos[self.model.jnt_qposadr[j]]
-            for j in self.linear_jnt_ids
-        ]
-        return float(np.mean(qpos))
+        # Use linear base controller's slide position
+        return self.linear_base_ctrl.get_slide_position()
     
     def _compute_obstacle_pos(self):
         tip_pos = self.data.xpos[self.tip_body_id][:2]
@@ -222,6 +232,45 @@ class CustomEnv(MujocoEnv):
             obstacles_radius.append(radius)
 
         return np.array(obstacles_radius)
+    
+    def _sample_valid_goal(self):
+        max_reach = self.max_reach   # define this once
+
+        for _ in range(100):  # avoid infinite loop
+            goal = np.array([
+                random.uniform(0.3, 0.6),
+                random.uniform(-0.2, 0.2),
+            ])
+
+            if not self._is_goal_valid(goal, max_reach):
+                continue
+
+            return goal
+
+        raise RuntimeError("Failed to sample valid goal.")
+    
+    def _is_inside_obstacle(self, goal):
+        for body_id in self.obstacle_body_ids:
+            center = self.data.xpos[body_id][:2]
+            geom_id = self.model.body_geomadr[body_id]
+            radius = self.model.geom_size[geom_id][0]
+
+            if np.linalg.norm(goal - center) < radius + 0.01:
+                return True
+        return False
+    
+    def _is_reachable(self, goal, max_reach):
+        return np.linalg.norm(goal - self.base_pos) <= max_reach
+    
+    def _is_goal_valid(self, goal, max_reach):
+
+        if self._is_inside_obstacle(goal):
+            return False
+
+        if not self._is_reachable(goal, max_reach):
+            return False
+
+        return True
     
     def _print_init_state(self):
         print("\n--- Environment Initialized ---")
@@ -265,13 +314,13 @@ class CustomEnv(MujocoEnv):
         }
 
     def get_reward(self, obs, action):
+
         dist = np.linalg.norm(obs["goal_rel_pos"])
 
         goal_threshold = 0.02
-        
         goal_bonus = 1000.0 if dist < goal_threshold else 0.0
 
-        distance_reward = -dist**2
+        distance_reward = dist**2
 
         contact_bonus = 0.01 * np.sum(obs["contact_hist"])
 
@@ -279,15 +328,15 @@ class CustomEnv(MujocoEnv):
         # Encourages smooth tendon/extension adjustments and prevents
         # the policy from exploiting actuator saturation or producing
         # high-frequency oscillations.
-        action_penalty = 0.001 * np.sum(action**2)
+        action_penalty = -0.0001 * np.sum(action**2) 
 
-        time_penalty = -0.001
+        time_penalty = -0.0001
 
         return (
             distance_reward
             + goal_bonus
             + contact_bonus
-            - action_penalty
+            + action_penalty
             + time_penalty
         )
 
@@ -295,14 +344,16 @@ class CustomEnv(MujocoEnv):
         return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
 
     def reset_model(self):
-        # Reset position
+
+
         qpos = self.init_qpos.copy()
         qvel = np.zeros_like(self.init_qvel)
-        self.set_state(qpos, qvel)
 
-        # Reset tendon and extension
-        self.data.ctrl[self.planar_tendon_ids] = 0.0
-        self.data.ctrl[self.linear_actuator_ids] = 0.0
+        # Small randomization in tendon space
+        noise_scale = 0.01
+        qpos += np.random.uniform(-noise_scale, noise_scale, size=qpos.shape)
+
+        self.set_state(qpos, qvel)
 
         # Randomize goal
         self.goal_pos = self._sample_valid_goal()
@@ -312,20 +363,32 @@ class CustomEnv(MujocoEnv):
     def step(self, action: np.ndarray):
         """
         Action:
-        [Δtendon1, Δtendon2, Δextension]
+        [bend_x, extension_delta] (planar system using Clark coordinates)
         """
-        # Clip action
-        # action = np.clip(action, -1.0, 1.0) # Moved into policy network
-        
-        # Apply Tendons and Extension differences
-        bending_delta = action[:2]
-        extension_delta = action[-1]
+        bend_x, extension_delta = action
 
-        # Map bending to tendon and extension
-        self.data.ctrl[self.planar_tendon_ids] += bending_delta
-        self.data.ctrl[self.linear_actuator_ids] += extension_delta
+        # Create command for TDCR controller (Clark coordinates)
+        command = {
+            "x": bend_x,  # Left/right bending (Clark x-coordinate)
+            "y": 0.0,     # No vertical bending (planar system)
+            "segment": 0, # Control first segment
+            "reset_home": False,
+            "linear_base_delta": extension_delta  # For compatibility, but we handle extension separately
+        }
 
-        # Step simulation
+        # Get target tendon positions from TDCR controller
+        tendon_targets = self.tdcr_controller.compute_target_qpos(command, self.data)
+
+        # Apply tendon targets
+        self.data.ctrl[self.tdcr_controller.tendon_actuator_ids] = tendon_targets[self.tdcr_controller.tendon_actuator_ids]
+
+        # Handle extension via linear base controller
+        lb_speed = 0.002  # Same as in teleop config
+        if abs(extension_delta) > 0.01:
+            new_target = self.linear_base_ctrl.get_slide_target() + extension_delta * lb_speed
+            self.linear_base_ctrl.set_slide_target(new_target)
+        self.linear_base_ctrl.update_stiffness()
+
         self.do_simulation(self.data.ctrl, self.frame_skip)
         
         next_state = self.get_state()
@@ -335,41 +398,3 @@ class CustomEnv(MujocoEnv):
         info = {}
         
         return next_state, reward, terminated, truncated, info
-    
-    def _sample_valid_goal(self):
-        max_reach = self.max_reach   # define this once
-
-        for _ in range(100):  # avoid infinite loop
-            goal = np.array([
-                random.uniform(0.3, 0.6),
-                random.uniform(-0.2, 0.2),
-            ])
-
-            if not self._is_goal_valid(goal, max_reach):
-                continue
-
-            return goal
-
-        raise RuntimeError("Failed to sample valid goal.")
-    def _is_inside_obstacle(self, goal):
-        for body_id in self.obstacle_body_ids:
-            center = self.data.xpos[body_id][:2]
-            geom_id = self.model.body_geomadr[body_id]
-            radius = self.model.geom_size[geom_id][0]
-
-            if np.linalg.norm(goal - center) < radius + 0.01:
-                return True
-        return False
-    
-    def _is_reachable(self, goal, max_reach):
-        return np.linalg.norm(goal - self.base_pos) <= max_reach
-    
-    def _is_goal_valid(self, goal, max_reach):
-
-        if self._is_inside_obstacle(goal):
-            return False
-
-        if not self._is_reachable(goal, max_reach):
-            return False
-
-        return True

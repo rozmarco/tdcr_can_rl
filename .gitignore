@@ -48,6 +48,8 @@ Makefile
 # Project specific
 checkpoints/
 data/
+logs/
+
 requirements.txt
 MUJOCO_LOG.TXT
 todo.txt

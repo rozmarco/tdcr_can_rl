@@ -3,34 +3,34 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Normal
 
 from .encoder import RobotFeatureEncoder
 from .latent import LatentHead
-from .decoder import NoisePredictor
+from .decoder import Decoder
 from .diffusion import DiffusionNetwork
 
-class LatentDiffusionPolicyPlanner(nn.Module):
+class LatentPolicyPlanner(nn.Module):
     """
-    Latent diffusion policy planner with modular encoder, latent VAE, and diffusion modules.
+    Latent policy planner using VAE.
 
     The architecture is fully modular:
 
         1. SpatialTemporalEncoder: encodes robot and obstacle features, applies temporal dynamics (Mamba layers).
         2. LatentHead: maps fused features to a latent Gaussian distribution (mu, log_std) and samples z.
-        3. DiffusionNetwork: predicts noise in latent space and performs forward/reverse diffusion.
-        4. State decoder: maps latent z back to next robot state.
+        3. Decoder: maps latent z back to next robot state.
 
     Args:
         r_dim (int): Dimension of the robot state input.
-        o_dim (int): Dimension of the obstacle / graph input.
         action_dim (int): Dimension of the output action.
         d_embedding (int): Size of per-encoder feature embeddings.
-        d_hidden (int): Hidden size after fusion and Mamba layers.
+        d_hidden_enc (int): Hidden size after fusion and Mamba layers.
+        d_hidden_dec (int): Hidden size for the decoder.
+        d_state (int): Size of state representation inside Mamba layers.
         d_latent (int): Size of latent vector for diffusion.
-        num_layers (int, optional): Number of Mamba layers. Default: 1
-        d_ff (int): Feedforward size inside each Mamba layer. Default: 64
-        diffusion_steps (int, optional): Number of diffusion steps. Default: 60
-        time_embed_type (str, optional): "learned" or "sinusoidal" time embeddings. Default: "learned"
+        num_layers_enc (int, optional): Number of Mamba layers in the encoder. Default: 1
+        num_layers_dec (int, optional): Number of Mamba layers in the decoder. Default: 1
+        diffusion_steps (int, optional): Number of diffusion steps. Default: 30
     """
     def __init__(
         self,
@@ -38,65 +38,59 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         action_dim: int,
         d_embedding: int = 32,
         d_hidden_enc: int = 64,
+        d_hidden_dec: int = 64,
         d_state: int = 32,
         d_latent: int = 64,
-        num_blocks: int = 3,
+        num_blocks_enc: int = 3,
         num_blocks_dec: int = 5,
+        expand_dec: int = 2,
         diffusion_steps: int = 30,
-        max_period: float = 10000.0,
+        max_period: float = 1000.0,
         **kwargs
     ):
-        super(LatentDiffusionPolicyPlanner, self).__init__()
+        super(LatentPolicyPlanner, self).__init__()
         self.action_dim = action_dim
 
         # --- ENCODER ---
         self.encoder = RobotFeatureEncoder(
             r_dim,
             d_hidden_enc,
-            d_embedding,
-            d_state,
-            num_blocks
+            d_embedding
         )
 
         self.latent = LatentHead(d_embedding, d_latent)
 
+        # --- DIFFUSION ---
+        # self.diffusion = DiffusionNetwork(
+        #     Decoder(d_latent, d_latent, d_latent, d_hidden_dec,
+        #             d_state, num_blocks=1, expand=expand_dec),
+        #     d_latent,
+        #     d_latent,
+        #     diffusion_steps,
+        #     max_period
+        # )
+
         # --- DECODER ---
-        self.decoder = NoisePredictor(
-            action_dim,
-            d_latent,
-            d_state,
-            num_blocks_dec
+        self.decoder = Decoder(
+            input_dim=d_embedding,
+            output_dim=action_dim,
+            d_cond=d_latent,
+            d_hidden=d_hidden_dec,
+            d_state=d_state,
+            num_blocks=num_blocks_dec,
+            expand=expand_dec
         )
 
-        self.diffusion = DiffusionNetwork(
-            self.decoder,
-            d_latent,
-            action_dim,
-            diffusion_steps,
-            max_period
-        )
+    def log_pi(self, mu, log_std):
+        normal = Normal(mu, torch.exp(log_std))
+        # Sample using reparameterization
+        u = normal.rsample()
+        # Log probability before tanh
+        log_prob = normal.log_prob(u).sum(dim=-1, keepdim=True)
+        # Tanh correction: log(1 - tanh(u)^2)
+        log_prob -= torch.log(1.0 - torch.tanh(u).pow(2) + 1e-6).sum(dim=-1, keepdim=True)
+        return log_prob
 
-    def log_pi(self, actions, z):
-        # Run the diffusion forward
-        output = self.diffusion(actions)
-        noisy_action = output["noisy_action"]        # [B, H, d_a]
-        target_noise = output["target_noise"]        # [B, H, d_a]
-        t = output["timestep"]                       # [B]
-
-        # Time embedding for conditioning
-        t_embed = self.diffusion.get_time_embedding(t)        # [B, d_z]
-        z_expanded = z + t_embed.unsqueeze(1)                 # [B, 1, d_z]
-        predicted_noise = self.diffusion.noise_predictor(noisy_action, z_expanded)  # [B, H, d_a]
-
-        # Compute log probability under unit Gaussian
-        # log N(x | mu, sigma=1) = -0.5 * (x - mu)^2 - 0.5 * log(2*pi)
-        log_prob_per_dim = -0.5 * (target_noise - predicted_noise)**2 - 0.5 * math.log(2*math.pi)
-        
-        # Sum over action dimensions and timesteps
-        log_pi = log_prob_per_dim.sum(dim=(-1))  # sum over d_a for log-prob per timestep.
-
-        return log_pi  # [B]
-    
     def forward(
         self, 
         x: torch.Tensor, 
@@ -117,15 +111,17 @@ class LatentDiffusionPolicyPlanner(nn.Module):
                 the log-probabilities of the predicted actions under the policy.
         """
         fused = self.encoder(x)
-        z, mu, std = self.latent(fused)
+        z, mu, log_std = self.latent(fused)
 
-        B = z.shape[0]
-        device = z.device
-        t = torch.randint(0, self.diffusion.diffusion_steps, (B,), device=device, dtype=torch.long)
-        sequence = torch.randn(B, horizon, self.action_dim, device=device)
-        plan = self.diffusion.reverse(sequence, z, t)
+        # B, L, D = z.shape
+        # device = z.device
+        # t = torch.randint(0, self.diffusion.diffusion_steps, (B,), dtype=torch.long, device=device)
+        # sequence = torch.randn((B, horizon, D), device=device)
+        # latent_plan = self.diffusion.reverse(sequence, z, t)
+        # plan = self.decoder(latent_plan, z)
+        plan = self.decoder(fused, z)
 
-        return F.tanh(plan), self.log_pi(plan, z)
+        return F.tanh(plan), self.log_pi(mu, log_std)
     
     @torch.no_grad()
     def sample(
@@ -134,7 +130,7 @@ class LatentDiffusionPolicyPlanner(nn.Module):
         horizon: int = 1
     ) -> torch.Tensor:
         """
-        Perform a multi-step rollout of the policy over a given horizon.
+        Perform a single/multi-step rollout of the policy over a given horizon.
 
         Args:
             x (torch.Tensor): Current robot observation/state. Shape: [Batch, Features].
@@ -148,6 +144,10 @@ class LatentDiffusionPolicyPlanner(nn.Module):
                 the log-probabilities of the predicted actions under the policy.
         """
         fused = self.encoder(x)
-        z, mu, std = self.latent(fused)
-        plan = self.diffusion.sample(z, horizon)
-        return F.tanh(plan), self.log_pi(plan, z)
+        z, mu, log_std = self.latent(fused)
+
+        # latent_plan = self.diffusion.sample(z, horizon)
+        # plan = self.decoder(latent_plan, z)
+        plan = self.decoder(fused, z)
+        
+        return F.tanh(plan), self.log_pi(mu, log_std)

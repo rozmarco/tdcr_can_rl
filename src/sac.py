@@ -18,7 +18,7 @@ class SoftActorCritic(nn.Module):
         q1: nn.Module,
         q2: nn.Module,
         replay_buffer,
-        horizon: int = 10,
+        horizon: int = 1,
         optimizer_str: str = "AdamW",
         policy_lr: float = 3e-4, 
         q_lr: float = 1e-3,
@@ -79,9 +79,9 @@ class SoftActorCritic(nn.Module):
 
         s = format_state(s, self.device)
         s_next = format_state(s_next, self.device)
-        r = format_reward(r, self.device)
-        done = format_terminal(done, self.device)
-        a = format_action(a, self.device)
+        r = format_reward(r, self.device).unsqueeze(-1).unsqueeze(-1) # [Batch] -> [Batch, 1, 1]
+        done = format_terminal(done, self.device).unsqueeze(-1).unsqueeze(-1) # [Batch] -> [Batch, 1, 1]
+        a = format_action(a, self.device).unsqueeze(1) # unsqueeze(1): temporary fix, problem stems from buffer.
 
         # --- Compute the Target Q-value ---
         with torch.no_grad():
@@ -91,7 +91,7 @@ class SoftActorCritic(nn.Module):
             target_q1_next = self.q1_target(s_next, next_action)
             target_q2_next = self.q2_target(s_next, next_action)
             
-            # The "Soft" State Value: min(Q) - alpha * entropy
+            # The Soft State Value: min(Q) - alpha * entropy
             min_target_q = torch.min(target_q1_next, target_q2_next)
             target_v = min_target_q - self.alpha * next_log_pi
             

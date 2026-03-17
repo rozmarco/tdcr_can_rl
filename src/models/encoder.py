@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-
-from .mamba import MambaTransformerLayer
+import torch.nn.functional as F
 
 class RobotFeatureEncoder(nn.Module):
     """
@@ -9,25 +8,18 @@ class RobotFeatureEncoder(nn.Module):
     """
     def __init__(
         self, 
-        r_input_size: int, 
+        r_dim: int, 
         d_hidden: int, 
         d_embedding: int,
-        d_state: int,
-        num_blocks: int
+        **kwargs
     ):
         super(RobotFeatureEncoder, self).__init__()
         
         self.mlp = nn.Sequential(
-            nn.Linear(r_input_size, d_hidden),
+            nn.Linear(r_dim, d_hidden),
             nn.GELU(),
             nn.Linear(d_hidden, d_embedding)
         )
 
-        self.mamba_block = nn.Sequential(
-            *[MambaTransformerLayer(d_embedding, d_state) for _ in range(num_blocks)]
-        )
-
     def forward(self, x):
-        x = self.mlp(x)
-        x = self.mamba_block(x)
-        return x
+        return self.mlp(x)

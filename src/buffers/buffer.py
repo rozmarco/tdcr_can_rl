@@ -130,7 +130,8 @@ class ReplayBuffer(BaseReplayBuffer):
         # self.next_state.fill(None) 
         # self.reward.fill(0)
         # self.done.fill(0)
-        
+        self.sampler.reset()
+
     def can_sample(self, horizon: int) -> bool:
         """
         Checks if there is enough data left for sampling.
@@ -167,20 +168,26 @@ class ReplayBuffer(BaseReplayBuffer):
             file_paths = [file_paths]
 
         for path in file_paths:
-            if not path.endswith('.npz'):
-                path += '.npz'
-
             if not os.path.exists(path):
                 continue
 
             with np.load(path, allow_pickle=True) as data:
-
                 n_samples = len(data['state'])
-                for i in range(n_samples):
-                    self.add(
-                        data['state'][i], 
-                        data['action'][i], 
-                        data['reward'][i], 
-                        data['next_state'][i], 
-                        data['done'][i]
-                    )
+
+                # Initialize buffers if empty
+                if self.state is None:
+                    self._init_buffers(data['action'][0])  # dummy sample for shape
+
+                # Determine insertion indices for circular buffer
+                idx = (np.arange(self.ptr, self.ptr + n_samples) % self.max_size)
+
+                # Bulk assignment
+                self.state[idx] = data['state']
+                self.action[idx] = data['action']
+                self.reward[idx] = data['reward']
+                self.next_state[idx] = data['next_state']
+                self.done[idx] = data['done']
+
+                # Update pointer and size
+                self.ptr = (self.ptr + n_samples) % self.max_size
+                self.size = min(self.size + n_samples, self.max_size)

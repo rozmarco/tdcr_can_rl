@@ -1,6 +1,9 @@
 import time
 import uuid
 
+from pathlib import Path
+from typing import Dict
+
 import numpy as np
 import torch
 import ray
@@ -8,9 +11,6 @@ import ray
 import mujoco
 from gymnasium.wrappers import TimeLimit
 from stable_baselines3.common.monitor import Monitor
-
-from pathlib import Path
-from typing import Dict
 
 from src.environment.env import CustomEnv
 from src.buffers.buffer import ReplayBuffer
@@ -23,9 +23,10 @@ class EnvRunner:
     """
     def __init__(
         self, 
+        name: str,
         is_train: bool,
         scene_path: str,
-        policy: torch.nn.Module,
+        policy_net: torch.nn.Module,
         horizon: int = 1,
         num_episodes: int = 1,
         max_steps: int = 25000,
@@ -35,6 +36,7 @@ class EnvRunner:
         buffer: ReplayBuffer = ReplayBuffer(),
         data_dir: str = "data",
         logs_dir: str = "logs",
+        logs_location = None,
         seed: int = 42,
         device = 'cpu'
     ):
@@ -67,7 +69,7 @@ class EnvRunner:
 
         self.is_train = is_train
         self.scene_path = scene_path
-        self.policy = policy
+        self.policy_net = policy_net
         self.horizon = horizon
         self.buffer = buffer
         self.num_episodes = num_episodes
@@ -80,16 +82,21 @@ class EnvRunner:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
-        self.monitor_file = self.logs_dir / f"monitor_{id(self)}.csv"
-
         self.env = CustomEnv(scene_path, render_mode, frame_skips, timestep)
         self.env = TimeLimit(self.env, max_episode_steps=self.max_steps)
-        self.env = Monitor(self.env, filename=str(self.monitor_file))
+
+        if logs_location is not None:
+            # Create runs folder if it does not exist
+            run_folder_path = self.logs_dir / Path(logs_location)
+            run_folder_path.mkdir(parents=True, exist_ok=True)
+            # Setup gynasium monitor
+            self.monitor_file = run_folder_path / f"worker{name}_monitor"
+            self.env = Monitor(self.env, filename=str(self.monitor_file))
 
     def _get_action(self, state: Dict) -> np.ndarray:
         r_state = flatten_state(state, self.device).view(1, 1, -1)
 
-        plan, _ = self.policy.sample(r_state, self.horizon)
+        plan, _ = self.policy_net.sample(r_state, self.horizon)
         plan = plan.detach().cpu().numpy().squeeze() # [Horizon, A_dim]
 
         # Receding horizon
@@ -124,7 +131,6 @@ class EnvRunner:
                 # Skip add for step 1 because of state type mismatch
                 if self.is_train and step_count >= 1:
                     self.buffer.add(state, action, reward, next_state, done)
-
                 step_count += 1
 
                 state = next_state
@@ -156,11 +162,12 @@ class EnvRunner:
 
 @ray.remote
 class ParallelEnvRunner(EnvRunner):
-    def __init__(self, is_train, scene_path, policy, config):
+    def __init__(self, name, is_train, scene_path, policy_net, config, logs_location):
         super().__init__(
+            name=name,
             is_train=is_train,
             scene_path=scene_path,
-            policy=policy,
+            policy_net=policy_net,
             horizon=config["agent"]["horizon"],
             num_episodes=config["env"]["num_episodes"],
             max_steps=config["env"]["max_steps"],
@@ -168,7 +175,8 @@ class ParallelEnvRunner(EnvRunner):
             timestep=config["env"]["timestep"],
             render_mode=config["env"]["render"],
             seed=config["seed"],
-            device=config["device"]
+            device=config["device"],
+            logs_location=logs_location
         )
 
     def run_session_remote(self):

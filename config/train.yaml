@@ -1,26 +1,28 @@
-scene: "assets/tdcr_linear_base_5_cyl_real.xml"
+scene: "tdcr_sim_mujoco/assets/tdcr/tdcr_linear_base_5_cyl_real.xml"
+workspace_npz: "tdcr_sim_mujoco/exploration_data/explored_configs_5cyl_labelled.npz"
 
-epochs: 5         # Number of training sessions
-device: "gpu"     # Device to run training on ("cpu" or "cuda" or "mps")
-seed: 42          # Random seed for reproducibility
+epochs: 5
+device: "cpu"       # Change to "cuda" or "mps" if available
+seed: 42
 
 env:
-  name: "tdcr-v1"       # Name or ID of the environment
-  render: "rgb_array"     # Rendering mode ("rgb_array", "human")
-  run_env: True         # Whether to actually run the environment (False = testing)
-  num_episodes: 2       # Number of episodes to run (sequentially) per epoch
-  max_steps: 100000      # Maximum steps per episode before truncation
-  num_workers: 3        # Number of parallel environment workers
+  name: "tdcr-v1"
+  render: "rgb_array"
+  run_env: True
+  num_episodes: 2
+  max_steps: 100000
+  num_workers: 3
   frame_skips: 50
   timestep: 0.002
+  allow_contact_goals: False
 
 buffer:
-  max_size: 1000000  # Suggestion: max_size > num_episodes * max_steps * num_workers
+  max_size: 1000000
 
 agent:
-  r_dim: 41
+  r_dim: 41           # 3+1+10+10+2+10+5 = 41 (5 cylinders, see env.py)
   action_dim: 2
-  optimizer: 
+  optimizer:
     _target_: "AdamW"
     betas: [0.9, 0.999]
     weight_decay: 0.01
@@ -30,8 +32,8 @@ agent:
   gamma: 0.99
   tau: 0.005
   alpha: 0.2
-  horizon: 1        # Do not change.
-  checkpoint: 1000  # buffer_size / batch_size = iterations
+  horizon: 1
+  checkpoint: 1000
 
 model:
   policy:
@@ -45,12 +47,11 @@ model:
     expand_dec: 2
     diffusion_steps: 20
     max_period: 250.0
-    checkpoint: None #./checkpoints/policy_9378_final.pth
-  
+    checkpoint: "None"    # quoted so yaml.safe_load gives a string, not Python None
   q_network:
     d_embedding: 32
     d_hidden: 16
     d_state: 8
     num_blocks: 1
-    checkpoint_q1: None #./checkpoints/q1_9378_final.pth
-    checkpoint_q2: None #./checkpoints/q2_9378_final.pth
+    checkpoint_q1: "None"
+    checkpoint_q2: "None"

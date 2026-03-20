@@ -1,14 +1,15 @@
 import os
+import glob
 import yaml
 
 import ray
 import torch
 import random
 import numpy as np
+import pandas as pd
 
 from tqdm import tqdm
 from pathlib import Path
-from itertools import count
 
 from src.environment.envrunner import EnvRunner, ParallelEnvRunner
 from src.models.policy_network import LatentPolicyPlanner
@@ -29,85 +30,100 @@ def set_seed(seed: int = 42):
 
 
 def run_environment(env_cls, scene_path, workspace_npz, loc):
-    """Launch parallel environment workers and collect rollouts."""
+    state_dict = {k: v.cpu() for k, v in policy_network.state_dict().items()}
     workers = [
-        env_cls.remote(i, True, scene_path, workspace_npz, policy_network, config, loc)
+        env_cls.remote(i, True, scene_path, workspace_npz, state_dict, config, loc)
         for i in range(config['env']['num_workers'])
     ]
-    future_results = [w.run_session_remote.remote() for w in workers]
-    return ray.get(future_results)
+    return ray.get([w.run_session_remote.remote() for w in workers])
 
 
-def get_sorted_npz():
-    npz_files = list(Path("data").rglob("*.npz"))
-    npz_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-    return [str(p) for p in npz_files]
+def get_new_npz(rollout_dir: Path, already_loaded: set) -> list:
+    """Return rollout npz files not yet loaded into the buffer."""
+    npz_files = sorted(rollout_dir.rglob("*.npz"), key=lambda x: x.stat().st_mtime)
+    return [str(p) for p in npz_files if str(p) not in already_loaded]
 
 
-def save_checkpoint(it, models):
+def get_avg_return(log_dir: Path, run_name: str) -> float:
+    run_path = log_dir / run_name
+    if not run_path.exists():
+        return float('-inf')
+    rewards = []
+    for csv in glob.glob(str(run_path / "*.csv")):
+        try:
+            df = pd.read_csv(csv, skiprows=1)
+            if "r" in df.columns and len(df) > 0:
+                rewards.append(df["r"].mean())
+        except Exception:
+            continue
+    return float(np.mean(rewards)) if rewards else float('-inf')
+
+
+def save_checkpoint(label, models):
     os.makedirs("checkpoints", exist_ok=True)
     for name, model in models.items():
-        path = f"checkpoints/{name}_{it}.pth"
-        if not os.path.exists(path):
-            torch.save(model.state_dict(), path)
+        torch.save(model.state_dict(), f"checkpoints/{name}_{label}.pth")
+
+
+def save_best_checkpoint(models, avg_return: float):
+    os.makedirs("checkpoints", exist_ok=True)
+    for name, model in models.items():
+        torch.save(model.state_dict(), f"checkpoints/{name}_best.pth")
+    tqdm.write(f"\033[92mNew best model saved — avg return: {avg_return:.2f}\033[0m")
 
 
 def load_checkpoint(network, checkpoint_path):
-    # yaml.safe_load turns bare None into Python None — guard here
     if checkpoint_path is None:
         print(f"\033[93mNo weights requested for {type(network).__name__}.\033[0m")
         return
     if str(checkpoint_path).strip().lower() in ["none", ""]:
         print(f"\033[93mNo weights requested for {type(network).__name__}.\033[0m")
         return
-
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.is_absolute():
         checkpoint_path = PROJECT_ROOT_ / checkpoint_path
-
     if not checkpoint_path.exists():
         print(f"\033[93mCould not find checkpoint: {checkpoint_path}.\033[0m")
         return
-
     network.load_state_dict(torch.load(checkpoint_path, weights_only=True), strict=False)
 
 
 if __name__ == '__main__':
     PROJECT_ROOT_ = Path(__file__).parent.resolve()
 
-    # ----- YAML CONFIGURATION -----
-    config_file = PROJECT_ROOT_ / "config" / "train.yaml"
-    with open(config_file, "r") as f:
+    with open(PROJECT_ROOT_ / "config" / "train.yaml", "r") as f:
         config = yaml.safe_load(f)
 
-    # ----- PATHS -----
     scene_path = Path(config["scene"])
     if not scene_path.is_absolute():
-        scene_path = PROJECT_ROOT_ / scene_path   # was incorrectly using PROJECT_ROOT (imported)
+        scene_path = PROJECT_ROOT_ / scene_path
 
     workspace_npz = Path(config["workspace_npz"])
     if not workspace_npz.is_absolute():
         workspace_npz = PROJECT_ROOT_ / workspace_npz
 
-    # ----- INITIALIZATION -----
+    rollout_dir = Path(config["env"]["rollout_data_dir"])
+    if not rollout_dir.is_absolute():
+        rollout_dir = PROJECT_ROOT_ / rollout_dir
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+
+    logs_dir = PROJECT_ROOT_ / "logs"
+
     set_seed(config["seed"])
 
-    r_dim      = config["agent"]["r_dim"]
-    action_dim = config["agent"]["action_dim"]
-
     policy_network = LatentPolicyPlanner(
-        r_dim=r_dim,
-        action_dim=action_dim,
+        r_dim=config["agent"]["r_dim"],
+        action_dim=config["agent"]["action_dim"],
         **config['model']["policy"]
     )
     q_network1 = QNetwork(
-        r_dim=r_dim,
-        action_dim=action_dim,
+        r_dim=config["agent"]["r_dim"],
+        action_dim=config["agent"]["action_dim"],
         **config["model"]["q_network"]
     )
     q_network2 = QNetwork(
-        r_dim=r_dim,
-        action_dim=action_dim,
+        r_dim=config["agent"]["r_dim"],
+        action_dim=config["agent"]["action_dim"],
         **config["model"]["q_network"]
     )
 
@@ -116,13 +132,10 @@ if __name__ == '__main__':
     load_checkpoint(q_network2,     config["model"]["q_network"]["checkpoint_q2"])
 
     for net in [policy_network, q_network1, q_network2]:
-        n_param = sum(p.numel() for p in net.parameters() if p.requires_grad)
-        print(f"\033[92mInitialized {type(net).__name__} with {n_param} parameters.\033[0m")
+        n = sum(p.numel() for p in net.parameters() if p.requires_grad)
+        print(f"\033[92mInitialized {type(net).__name__} with {n} parameters.\033[0m")
 
-    buffer = ReplayBuffer(
-        max_size=config["buffer"]["max_size"],
-        seed=config["seed"]
-    )
+    buffer = ReplayBuffer(max_size=config["buffer"]["max_size"], seed=config["seed"])
 
     sac = SoftActorCritic(
         policy=policy_network,
@@ -137,21 +150,26 @@ if __name__ == '__main__':
         gamma=config["agent"]["gamma"],
         tau=config["agent"]["tau"],
         alpha=config["agent"]["alpha"],
+        action_dim=config["agent"]["action_dim"],
         seed=config["seed"],
         device=config["device"]
     )
 
-    models_to_save = {"policy": policy_network, "q1": q_network1, "q2": q_network2}
-    checkpoint_freq = config['agent']['checkpoint']
+    models_to_save  = {"policy": policy_network, "q1": q_network1, "q2": q_network2}
     total_epochs    = config['epochs']
+    updates_per_epoch = config['agent']['updates_per_epoch']
+    checkpoint_freq   = config['agent']['checkpoint']
+    best_return       = float('-inf')
+    loaded_npz        = set()
+    total_updates     = 0
 
-    # ----- TRAINING -----
     os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
     ray.init(ignore_reinit_error=True)
 
     for epoch in tqdm(range(total_epochs), desc="Epochs", leave=True):
+        run_name = f"run_{epoch}"
 
-        # --- Run Environment (collect rollouts) ---
+        # --- Collect rollouts ---
         if config['env']['run_env']:
             policy_network.eval()
             with torch.no_grad():
@@ -159,28 +177,34 @@ if __name__ == '__main__':
                     ParallelEnvRunner,
                     scene_path=str(scene_path),
                     workspace_npz=str(workspace_npz),
-                    loc=f"run_{epoch}",
+                    loc=run_name,
                 )
             tqdm.write(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
 
-        # --- Load Buffer ---
-        buffer.clear()
-        npz_files = get_sorted_npz()
-        buffer.load(npz_files)
-        tqdm.write(f"\033[92mLoaded {len(buffer)} samples.\033[0m")
+            avg_return = get_avg_return(logs_dir, run_name)
+            tqdm.write(f"\033[92mEpoch {epoch} avg return: {avg_return:.2f}\033[0m")
+            if avg_return > best_return:
+                best_return = avg_return
+                save_best_checkpoint(models_to_save, avg_return)
 
-        # --- SAC Training ---
-        with tqdm(desc="Training Iteration", leave=False) as pbar:
-            for iteration in count():
-                if not buffer.can_sample(horizon=config["agent"]["horizon"]):
-                    break
+        # --- Load only new rollout files (buffer accumulates) ---
+        new_files = get_new_npz(rollout_dir, loaded_npz)
+        if new_files:
+            buffer.load(new_files)
+            loaded_npz.update(new_files)
+            tqdm.write(f"\033[92mLoaded {len(new_files)} new files — buffer size: {len(buffer)}\033[0m")
 
+        # --- Fixed number of SAC updates ---
+        if buffer.can_sample(config["agent"]["horizon"]):
+            for i in tqdm(range(updates_per_epoch), desc="SAC updates", leave=False):
                 sac.update()
+                total_updates += 1
+                if total_updates % checkpoint_freq == 0:
+                    save_checkpoint(total_updates, models_to_save)
+            tqdm.write(f"\033[92mFinished {updates_per_epoch} SAC updates (total: {total_updates}).\033[0m")
+        else:
+            tqdm.write(f"\033[93mBuffer too small to sample — skipping SAC updates.\033[0m")
 
-                if iteration % checkpoint_freq == 0:
-                    save_checkpoint(iteration, models_to_save)
-
-                pbar.update(1)
-        tqdm.write(f"\033[92mFinished SAC training.\033[0m")
-
-    save_checkpoint(f"{iteration}_final", models_to_save)
+    save_checkpoint("final", models_to_save)
+    tqdm.write(f"\033[92mTraining complete. Best return: {best_return:.2f}\033[0m")
+    tqdm.write(f"\033[92mBest weights: checkpoints/*_best.pth\033[0m")

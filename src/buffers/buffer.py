@@ -2,153 +2,87 @@ import os
 import numpy as np
 
 from typing import Union, List
-
 from src.buffers.base import BaseReplayBuffer
-from src.utils.sampler import NumpySampler
+
 
 class ReplayBuffer(BaseReplayBuffer):
     """
-    A buffer for storing and sampling transitions.
+    Replay buffer for SAC. States are flat float32 numpy arrays.
+    Uses simple random sampling with replacement — standard for off-policy RL.
     """
-    def __init__(
-        self, 
-        max_size: int = 1000000,
-        seed: int = 42
-    ):
+    def __init__(self, max_size: int = 1000000, seed: int = 42):
         self.max_size = max_size
+        self.ptr      = 0
+        self.size     = 0
 
-        self.ptr = 0
-        self.size = 0
-        
-        self.state = None
+        self.state      = None
         self.next_state = None
-        self.action = None
-        self.reward = None
-        self.done = None
-
-        self.samples_consumed = 0
+        self.action     = None
+        self.reward     = None
+        self.done       = None
 
         self._rng = np.random.default_rng(seed)
-        self.sampler = NumpySampler(rng=self._rng)
 
-    def _init_buffers(self, action: np.ndarray):
-        """
-        Helper to create arrays based on the shapes of the first sample.
-        """
-        self.state = np.empty((self.max_size, 1), dtype=object)
-        self.next_state = np.empty((self.max_size, 1), dtype=object)
-        self.action = np.zeros((self.max_size, *np.shape(action)), dtype=np.float32)
-        self.reward = np.zeros((self.max_size, 1), dtype=np.float32)
-        self.done = np.zeros((self.max_size, 1), dtype=bool)
-    
-    def add(
-        self, 
-        state: np.ndarray, 
-        action: np.ndarray, 
-        reward: Union[np.ndarray, float], 
-        next_state: np.ndarray,
-        done: Union[bool, int]
-    ):
-        """
-        Adds a new transition to the replay buffer. If the buffer is full, 
-        the oldest transition is overwritten.
+    def _init_buffers(self, state: np.ndarray, action: np.ndarray):
+        state_dim  = state.shape[0]
+        action_dim = np.shape(action)
+        self.state      = np.zeros((self.max_size, state_dim),   dtype=np.float32)
+        self.next_state = np.zeros((self.max_size, state_dim),   dtype=np.float32)
+        self.action     = np.zeros((self.max_size, *action_dim), dtype=np.float32)
+        self.reward     = np.zeros((self.max_size, 1),           dtype=np.float32)
+        self.done       = np.zeros((self.max_size, 1),           dtype=bool)
 
-        Args:
-            state (np.ndarray): The observation/state at the current timestep.
-            action (np.ndarray): The action taken by the agent.
-            reward (float or np.ndarray): The scalar reward received.
-            next_state (np.ndarray): The observation/state after the action.
-            done (bool or int): Terminal flag (1 or True if episode ended).
-
-        Returns:
-            None
-        """
-        # Assumption: If state is empty, then recent buffer initialization
+    def add(self, state, action, reward, next_state, done):
         if self.state is None:
-            self._init_buffers(action)
-
-        self.state[self.ptr] = state
-        self.action[self.ptr] = action
-        self.reward[self.ptr] = reward
+            self._init_buffers(state, action)
+        self.state[self.ptr]      = state
+        self.action[self.ptr]     = action
+        self.reward[self.ptr]     = reward
         self.next_state[self.ptr] = next_state
-        self.done[self.ptr] = done
-        
-        self.ptr = (self.ptr + 1) % self.max_size
+        self.done[self.ptr]       = done
+        self.ptr  = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
-    def sample(self, batch_size: int, horizon: int=1):
+    def sample(self, batch_size: int, horizon: int = 1):
         """
-        Randomly samples a batch of experience sequences from the buffer.
-
-        Args:
-            batch_size (int): Number of independent sequences to sample.
-            horizon (int): The length of each sequence (n-steps). Defaults to 1.
-
-        Returns:
-            tuple: A tuple containing (states, actions, rewards, next_states, dones).
+        Random sample with replacement. Standard SAC sampling.
+        Returns lists of (horizon, dim) arrays, one per batch item.
         """
-        assert horizon >= 1, "Horizon must be at least 1"
-        assert batch_size > 0, "Batch size must be positive"
+        assert self.size > horizon, "Not enough data to sample"
+
+        # Sample random start indices
+        indices = self._rng.integers(0, self.size - horizon, size=batch_size)
 
         s_batch, a_batch, r_batch, ns_batch, d_batch = [], [], [], [], []
-
-        # Sample for indices (Without Replacement)
-        indices = self.sampler.sample(batch_size, self.size - horizon + 1)
-        self.samples_consumed += len(indices)
-
         for start_idx in indices:
-            # Check for 'done' within this specific horizon
-            chunk_dones = self.done[start_idx : start_idx + horizon].flatten()
+            chunk_dones  = self.done[start_idx : start_idx + horizon].flatten()
             done_indices = np.where(chunk_dones)[0]
-            
-            # Truncate at the first 'done' found
-            actual_len = (done_indices[0] + 1) if done_indices.size > 0 else horizon
-            effective_end = start_idx + actual_len
+            actual_len   = (done_indices[0] + 1) if done_indices.size > 0 else horizon
+            end          = start_idx + actual_len
 
-            s_batch.append(self.state[start_idx : effective_end])
-            a_batch.append(self.action[start_idx : effective_end])
-            r_batch.append(self.reward[start_idx : effective_end])
-            ns_batch.append(self.next_state[start_idx : effective_end])
-            d_batch.append(self.done[start_idx : effective_end])
+            s_batch.append(self.state[start_idx:end])
+            a_batch.append(self.action[start_idx:end])
+            r_batch.append(self.reward[start_idx:end])
+            ns_batch.append(self.next_state[start_idx:end])
+            d_batch.append(self.done[start_idx:end])
 
         return s_batch, a_batch, r_batch, ns_batch, d_batch
-    
+
+    def can_sample(self, horizon: int = 1) -> bool:
+        return self.size > horizon
+
     def __len__(self):
         return self.size
-    
-    def clear(self):
-        """
-        Resets pointers. 
-        New data will overwrite old entries starting from index 0.
-        Does not reset the buffer to an empty state.
-        """
-        self.ptr = 0
-        self.size = 0
-        self.samples_consumed = 0
-        # self.state.fill(None) 
-        # self.action.fill(0)
-        # self.next_state.fill(None) 
-        # self.reward.fill(0)
-        # self.done.fill(0)
-        self.sampler.reset()
 
-    def can_sample(self, horizon: int) -> bool:
-        """
-        Checks if there is enough data left for sampling.
-        """
-        remaining_samples = self.size - self.samples_consumed - horizon + 1
-        return remaining_samples > 0 or self.sampler.can_sample() # Both should be simul true/false
+    def clear(self):
+        self.ptr  = 0
+        self.size = 0
 
     def save(self, file_path: str):
-        """
-        Save the buffer to disk.
-        """
         if self.size <= 0:
             return
-
         if not file_path.endswith('.npz'):
             file_path += '.npz'
-            
         np.savez_compressed(
             file_path,
             state=self.state[:self.size],
@@ -156,38 +90,23 @@ class ReplayBuffer(BaseReplayBuffer):
             reward=self.reward[:self.size],
             next_state=self.next_state[:self.size],
             done=self.done[:self.size],
-            ptr=self.ptr,
-            size=self.size
         )
-    
+
     def load(self, file_paths: Union[str, List[str]]):
-        """
-        Load buffer from disk.
-        """
         if isinstance(file_paths, str):
             file_paths = [file_paths]
-
         for path in file_paths:
             if not os.path.exists(path):
                 continue
-
             with np.load(path, allow_pickle=True) as data:
-                n_samples = len(data['state'])
-
-                # Initialize buffers if empty
+                n = len(data['state'])
                 if self.state is None:
-                    self._init_buffers(data['action'][0])  # dummy sample for shape
-
-                # Determine insertion indices for circular buffer
-                idx = (np.arange(self.ptr, self.ptr + n_samples) % self.max_size)
-
-                # Bulk assignment
-                self.state[idx] = data['state']
-                self.action[idx] = data['action']
-                self.reward[idx] = data['reward']
+                    self._init_buffers(data['state'][0], data['action'][0])
+                idx = np.arange(self.ptr, self.ptr + n) % self.max_size
+                self.state[idx]      = data['state']
+                self.action[idx]     = data['action']
+                self.reward[idx]     = data['reward']
                 self.next_state[idx] = data['next_state']
-                self.done[idx] = data['done']
-
-                # Update pointer and size
-                self.ptr = (self.ptr + n_samples) % self.max_size
-                self.size = min(self.size + n_samples, self.max_size)
+                self.done[idx]       = data['done']
+                self.ptr  = (self.ptr + n) % self.max_size
+                self.size = min(self.size + n, self.max_size)

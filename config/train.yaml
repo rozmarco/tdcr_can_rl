@@ -1,26 +1,27 @@
 scene: "tdcr_sim_mujoco/assets/tdcr/tdcr_linear_base_5_cyl_real.xml"
-workspace_npz: "tdcr_sim_mujoco/exploration_data/explored_configs_5cyl_labelled.npz"
+workspace_npz: "tdcr_sim_mujoco/data/workspace_train.npz"
 
-epochs: 5
-device: "cpu"       # Change to "cuda" or "mps" if available
+epochs: 50
+device: "cuda"
 seed: 42
 
 env:
   name: "tdcr-v1"
   render: "rgb_array"
   run_env: True
-  num_episodes: 2
-  max_steps: 100000
+  num_episodes: 5
+  max_steps: 1000
   num_workers: 3
   frame_skips: 50
   timestep: 0.002
   allow_contact_goals: False
+  rollout_data_dir: "tdcr_sim_mujoco/data/rollouts"
 
 buffer:
   max_size: 1000000
 
 agent:
-  r_dim: 41           # 3+1+10+10+2+10+5 = 41 (5 cylinders, see env.py)
+  r_dim: 41
   action_dim: 2
   optimizer:
     _target_: "AdamW"
@@ -28,12 +29,13 @@ agent:
     weight_decay: 0.01
   policy_lr: 0.0003
   q_lr: 0.001
-  batch_size: 64
+  batch_size: 256
   gamma: 0.99
   tau: 0.005
   alpha: 0.2
   horizon: 1
-  checkpoint: 1000
+  updates_per_epoch: 5000   # fixed SAC gradient steps per epoch
+  checkpoint: 5000          # save checkpoint every N total updates
 
 model:
   policy:
@@ -47,7 +49,7 @@ model:
     expand_dec: 2
     diffusion_steps: 20
     max_period: 250.0
-    checkpoint: "None"    # quoted so yaml.safe_load gives a string, not Python None
+    checkpoint: "None"
   q_network:
     d_embedding: 32
     d_hidden: 16

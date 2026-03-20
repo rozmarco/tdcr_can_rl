@@ -130,8 +130,8 @@ class CustomEnv(MujocoEnv):
         """
         ws   = np.load(npz_path)
         mask = np.ones(len(ws['tip_positions']), dtype=bool)
-        #if not allow_contact_goals:
-        #    mask &= ~ws['contact_at_goal']
+        if not allow_contact_goals:
+            mask &= ~ws["contact_at_goal"]
 
         idx = np.where(mask)[0]
         self._ws_tip_pos   = ws['tip_positions'][idx, :2].astype(np.float32)
@@ -273,9 +273,9 @@ class CustomEnv(MujocoEnv):
 
     def get_reward(self, obs, action):
         dist           = np.linalg.norm(obs["goal_rel_pos"])
-        goal_bonus     = 1000.0 if dist < 0.02 else 0.0
+        goal_bonus     = 100.0 if dist < 0.02 else 0.0
         dist_reward    = -(dist ** 2)
-        contact_bonus  =  0.01   * np.sum(obs["contact_hist"])
+        contact_bonus  = 0.0
         action_penalty = -0.0001 * np.sum(action ** 2)
         time_penalty   = -0.0001
         return dist_reward + goal_bonus + contact_bonus + action_penalty + time_penalty

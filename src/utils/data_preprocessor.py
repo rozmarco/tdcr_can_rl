@@ -7,11 +7,24 @@ def flatten_state(state, device=None) -> torch.Tensor:
     tensors = []
     for key, value in state.items():
         if isinstance(value, dict):
-            tensors.append(flatten_state(value)) # If it's a sub-dictionary, go deeper
+            tensors.append(flatten_state(value))
         else:
             tensors.append(torch.as_tensor(value, dtype=torch.float32).flatten())
     tensor_cat = torch.cat(tensors, dim=0)
     return tensor_cat.to(device) if device else tensor_cat
+
+def format_flat_state(state, device=None) -> torch.Tensor:
+    """
+    Convert a batch of flat numpy state arrays (from the buffer) to a tensor.
+    Each item in state is a (horizon, state_dim) float32 numpy array.
+    Output: [Batch, Horizon, state_dim]
+    """
+    t_list = [torch.as_tensor(item, dtype=torch.float32) for item in state]
+    out = pad_sequence(t_list, batch_first=True, padding_value=0.0)
+    # If horizon=1, pad_sequence may drop the sequence dim — restore it
+    if out.dim() == 2:
+        out = out.unsqueeze(1)  # [B, state_dim] -> [B, 1, state_dim]
+    return out.to(device) if device else out
 
 def format_state(state, device=None) -> torch.Tensor:
     """Recursive wrapper to maintain input nesting in the output."""
@@ -39,32 +52,21 @@ def format_state(state, device=None) -> torch.Tensor:
 
 def format_reward(reward, device=None) -> torch.Tensor:
     r_list = [torch.as_tensor(item, dtype=torch.float32) for item in reward]
-    
-    # Pad shorter sequences, though risky as 0.0 means something to reward
     r_out = pad_sequence(r_list, batch_first=True, padding_value=0.0).squeeze()
-
     if device:
         r_out = r_out.to(device)
-
     return r_out
 
 def format_terminal(terminal, device=None) -> torch.Tensor:
     t_list = [torch.as_tensor(item, dtype=torch.float32) for item in terminal]
-
-    # Pad shorter sequences with 1.0 to end sequence in bellman equation
     t_out = pad_sequence(t_list, batch_first=True, padding_value=1.0).squeeze()
-
     if device:
         t_out = t_out.to(device)
-    
     return t_out
 
 def format_action(action, device=None) -> torch.Tensor:
     a_list = [torch.as_tensor(item, dtype=torch.float32) for item in action]
-
     a_out = pad_sequence(a_list, batch_first=True, padding_value=0.0).squeeze()
-
     if device:
         a_out = a_out.to(device)
-
     return a_out

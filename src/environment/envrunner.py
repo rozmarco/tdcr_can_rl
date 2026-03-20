@@ -37,7 +37,7 @@ class EnvRunner:
         render_mode: str = "human",
         allow_contact_goals: bool = False,
         buffer: ReplayBuffer = None,
-        data_dir: str = "data",
+        data_dir: str = "data/rollouts",
         logs_dir: str = "logs",
         logs_location=None,
         seed: int = 42,
@@ -78,6 +78,7 @@ class EnvRunner:
             self.env = Monitor(self.env, filename=str(self.monitor_file))
 
     def _get_action(self, state: Dict) -> np.ndarray:
+        # flatten_state sends the tensor to self.device (cpu for workers)
         r_state = flatten_state(state, self.device).view(1, 1, -1)
         plan, _ = self.policy_net.sample(r_state, self.horizon)
         plan    = plan.detach().cpu().numpy().squeeze()  # [Horizon, A_dim]
@@ -85,6 +86,10 @@ class EnvRunner:
         # Receding horizon: take first action
         action = plan[0] if plan.ndim > 1 else plan
         return action
+
+    def _flatten_state(self, state: Dict) -> np.ndarray:
+        """Flatten a state dict to a 1-D float32 numpy array for buffer storage."""
+        return flatten_state(state, device=None).numpy()
 
     def _save_buffer(self):
         filename = (
@@ -105,9 +110,13 @@ class EnvRunner:
                 next_state, reward, terminated, truncated, info = self.env.step(action)
                 done = terminated or truncated
 
-                # Skip step 0: state dict shape differs before first physics step
+                # Skip step 0: state dict shape differs before first physics step.
+                # Flatten dicts to numpy arrays before storing — buffer expects
+                # flat float32 arrays, not raw dicts.
                 if self.is_train and step_count >= 1:
-                    self.buffer.add(state, action, reward, next_state, done)
+                    s_flat  = self._flatten_state(state)
+                    ns_flat = self._flatten_state(next_state)
+                    self.buffer.add(s_flat, action, reward, ns_flat, done)
 
                 step_count += 1
                 state = next_state
@@ -137,7 +146,21 @@ class EnvRunner:
 
 @ray.remote
 class ParallelEnvRunner(EnvRunner):
-    def __init__(self, name, is_train, scene_path, workspace_npz, policy_net, config, logs_location):
+    def __init__(self, name, is_train, scene_path, workspace_npz, policy_state_dict, config, logs_location):
+        from src.models.policy_network import LatentPolicyPlanner
+
+        # Reconstruct the model inside the worker process from the plain state dict.
+        # Workers always run on CPU — the GPU is reserved for SAC training in the
+        # main process. The model is tiny (63K params) so CPU inference is fast.
+        policy_net = LatentPolicyPlanner(
+            r_dim=config["agent"]["r_dim"],
+            action_dim=config["agent"]["action_dim"],
+            **config['model']["policy"]
+        )
+        policy_net.load_state_dict(policy_state_dict)
+        policy_net.to('cpu')
+        policy_net.eval()
+
         super().__init__(
             name=name,
             is_train=is_train,
@@ -151,8 +174,9 @@ class ParallelEnvRunner(EnvRunner):
             timestep=config["env"]["timestep"],
             render_mode=config["env"]["render"],
             allow_contact_goals=config["env"].get("allow_contact_goals", False),
+            data_dir=config["env"]["rollout_data_dir"],
             seed=config["seed"],
-            device=config["device"],
+            device='cpu',
             logs_location=logs_location,
         )
 

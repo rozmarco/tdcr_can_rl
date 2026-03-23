@@ -6,6 +6,8 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.mujoco import MujocoEnv
 
+from src.pose_lookup_multi import MultiPoseLookupTable
+
 from tdcr_sim_mujoco.src.controllers import (
     LinearBaseStiffnessController,
     TDCRJointController
@@ -52,7 +54,11 @@ class CustomEnv(MujocoEnv):
     def __init__(
         self,
         scene_path: str,
-        workspace_npz: str,
+        workspace_npz: str | None = None,
+        lookup_npz_paths=None,
+        lookup_train_goal_count: int | None = None,
+        use_lookup_reward: bool = False,
+        lookup_search_radius: int = 1,
         render_mode: str = "human",
         frame_skips: int = 50,
         timstep: float = 0.002,
@@ -73,17 +79,31 @@ class CustomEnv(MujocoEnv):
             allow_contact_goals: Include configs where tip contacts obstacle at goal.
             **kwargs:            Passed through to MujocoEnv.
         """
-        self.n_curv_bins   = n_curv_bins
+        self.n_curv_bins = n_curv_bins
         self.n_contact_bins = n_contact_bins
-
-        # Load workspace before super().__init__ so obstacle count is known
-        # when _build_observation_space() is called.
-        self._load_workspace(workspace_npz, allow_contact_goals)
-
-        # Temporarily set n_obstacles=0; _cache_ids() (called after super) sets the real value.
-        # _build_observation_space() uses self.n_obstacles, so we need a placeholder.
+        
         self.n_obstacles = 0
-
+        
+        self.use_lookup_reward = use_lookup_reward
+        self.lookup_search_radius = lookup_search_radius
+        
+        self.lookup = None
+        self.goal_idx = None
+        self.goal_theta = 0.0
+        self.prev_lookup_cost = None
+        
+        if self.use_lookup_reward:
+            if not lookup_npz_paths:
+                raise ValueError("use_lookup_reward=True but lookup_npz_paths is empty")
+            self.lookup = MultiPoseLookupTable(
+                lookup_npz_paths,
+                train_goal_count=lookup_train_goal_count,
+            )
+        else:
+            if workspace_npz is None:
+                raise ValueError("workspace_npz is required when not using lookup reward")
+            self._load_workspace(workspace_npz, allow_contact_goals)
+    
         super().__init__(
             model_path=str(scene_path),
             render_mode=render_mode,
@@ -99,7 +119,8 @@ class CustomEnv(MujocoEnv):
         self.observation_space = self._build_observation_space()
 
         self.base_pos = np.array([0.0, 0.0])
-        self.goal_pos = self._sample_goal_from_workspace()
+        self.goal_pos, self.goal_theta = None, None
+        self._sample_new_goal()
 
         self.action_space = spaces.Box(
             low=-1.0, high=1.0, shape=(2,), dtype=np.float32
@@ -147,6 +168,33 @@ class CustomEnv(MujocoEnv):
     def _sample_goal_from_workspace(self) -> np.ndarray:
         idx = np.random.randint(len(self._ws_tip_pos))
         return self._ws_tip_pos[idx].copy()
+        
+    def _get_tip_theta(self) -> float:
+        # heading from last two link positions in XY
+        if len(self.link_body_ids) >= 2:
+            p_prev = self.data.xpos[self.link_body_ids[-2]][:2]
+            p_tip = self.data.xpos[self.tip_body_id][:2]
+            d = p_tip - p_prev
+            return float(np.arctan2(d[1], d[0]))
+        return 0.0
+
+    def _get_robot_pose(self):
+        tip_pos = self.data.xpos[self.tip_body_id][:2]
+        tip_theta = self._get_tip_theta()
+        return float(tip_pos[0]), float(tip_pos[1]), float(tip_theta)
+    
+    def _sample_new_goal(self):
+        if self.use_lookup_reward:
+            self.goal_idx = self.lookup.sample_train_goal_idx()
+            gx, gy, gtheta = self.lookup.get_goal_pose(self.goal_idx)
+            self.goal_pos = np.array([gx, gy], dtype=np.float32)
+            self.goal_theta = float(gtheta)
+            self.prev_lookup_cost = None
+        else:
+            self.goal_pos = self._sample_goal_from_workspace()
+            self.goal_theta = 0.0
+            self.goal_idx = None
+            self.prev_lookup_cost = None
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -208,6 +256,7 @@ class CustomEnv(MujocoEnv):
             "goal_rel_pos":    spaces.Box(-np.inf, np.inf, shape=(2,),                   dtype=np.float32),
             "obstacle_pos":    spaces.Box(-np.inf, np.inf, shape=(self.n_obstacles * 2,), dtype=np.float32),
             "obstacle_radius": spaces.Box(0.0,     np.inf, shape=(self.n_obstacles,),     dtype=np.float32),
+            "goal_rel_theta":  spaces.Box(-np.pi, np.pi, shape=(1,),                      dtype=np.float32),
         })
 
     # ------------------------------------------------------------------
@@ -261,27 +310,95 @@ class CustomEnv(MujocoEnv):
 
     def get_state(self):
         tip_pos = self.data.xpos[self.tip_body_id][:2]
+        tip_theta = self._get_tip_theta()
+    
+        goal_rel_theta = self.lookup.angle_diff(self.goal_theta, tip_theta) if self.use_lookup_reward \
+            else 0.0
+    
         return {
             "tendon_length":   self.data.ten_length[:3].copy().astype(np.float32),
             "extension":       np.array([self._get_extension()], dtype=np.float32),
             "curvature_hist":  self._compute_curvature_histogram(),
             "contact_hist":    self._compute_contact_histogram(),
             "goal_rel_pos":    (self.goal_pos - tip_pos).astype(np.float32),
+            "goal_rel_theta":  np.array([goal_rel_theta], dtype=np.float32),
             "obstacle_pos":    self._compute_obstacle_pos(),
             "obstacle_radius": self._get_obstacle_radius(),
         }
-
+    
+    def _lookup_cost_current_pose(self):
+        x, y, theta = self._get_robot_pose()
+        return self.lookup.lookup_cost(
+            goal_idx=self.goal_idx,
+            x=x,
+            y=y,
+            theta=theta,
+            unreachable_value=np.inf,
+            search_radius=self.lookup_search_radius,
+        )
+    
     def get_reward(self, obs, action):
-        dist           = np.linalg.norm(obs["goal_rel_pos"])
-        goal_bonus     = 100.0 if dist < 0.02 else 0.0
-        dist_reward    = -(dist ** 2)
-        contact_bonus  = 0.0
         action_penalty = -0.0001 * np.sum(action ** 2)
-        time_penalty   = -0.0001
-        return dist_reward + goal_bonus + contact_bonus + action_penalty + time_penalty
+        time_penalty = -0.0001
+    
+        if not self.use_lookup_reward:
+            dist = np.linalg.norm(obs["goal_rel_pos"])
+            goal_bonus = 100.0 if dist < 0.02 else 0.0
+            dist_reward = -(dist ** 2)
+            return dist_reward + goal_bonus + action_penalty + time_penalty
+    
+        curr_cost, valid, _ = self._lookup_cost_current_pose()
+    
+        # outside lookup support / unreachable
+        if (not valid) or (not np.isfinite(curr_cost)):
+            return -5.0 + action_penalty + time_penalty
+    
+        if self.prev_lookup_cost is None or not np.isfinite(self.prev_lookup_cost):
+            delta_cost = 0.0
+        else:
+            delta_cost = float(self.prev_lookup_cost - curr_cost)
+    
+        # keep update for next step
+        self.prev_lookup_cost = curr_cost
+    
+        # 1) progress reward
+        progress_reward = 300.0 * delta_cost
+    
+        # 2) absolute cost shaping
+        cost_reward = -2.0 * curr_cost
+    
+        # 3) orientation shaping
+        theta_err = abs(float(obs["goal_rel_theta"][0]))
+        theta_penalty = -0.05 * theta_err
+    
+        # 4) staged near-goal bonus
+        success_bonus = 0.0
+        if curr_cost < 0.10:
+            success_bonus += 0.5
+        if curr_cost < 0.05:
+            success_bonus += 1.0
+        if curr_cost < 0.02:
+            success_bonus += 2.0
+    
+        total_reward = (
+            progress_reward
+            + cost_reward
+            + theta_penalty
+            + action_penalty
+            + time_penalty
+            + success_bonus
+        )
+    
+        return total_reward
 
     def is_terminal(self, obs):
-        return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
+        if not self.use_lookup_reward:
+            return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
+    
+        curr_cost, valid, _ = self._lookup_cost_current_pose()
+        if (not valid) or (not np.isfinite(curr_cost)):
+            return False
+        return curr_cost <= 0.02
 
     # ------------------------------------------------------------------
     # Action application
@@ -334,8 +451,16 @@ class CustomEnv(MujocoEnv):
         qvel = np.zeros_like(self.init_qvel)
         qpos += np.random.uniform(-0.01, 0.01, size=qpos.shape)
         self.set_state(qpos, qvel)
-        self.goal_pos = self._sample_goal_from_workspace()
-        return self.get_state()
+    
+        self._sample_new_goal()
+    
+        state = self.get_state()
+    
+        if self.use_lookup_reward:
+            curr_cost, valid, _ = self._lookup_cost_current_pose()
+            self.prev_lookup_cost = curr_cost if valid and np.isfinite(curr_cost) else None
+    
+        return state
 
     def step(self, action: np.ndarray):
         clark_target, ext_target = self._remap_action(action)
@@ -355,7 +480,10 @@ class CustomEnv(MujocoEnv):
         print(f"  ctrl shape:        {self.data.ctrl.shape}")
         print(f"  num links:         {len(self.link_body_ids)}")
         print(f"  num obstacles:     {self.n_obstacles}")
-        print(f"  workspace configs: {len(self._ws_tip_pos)}")
+        if self.use_lookup_reward:
+            print(f"  lookup goals:      {self.lookup.num_goals}")
+        else:
+            print(f"  workspace configs: {len(self._ws_tip_pos)}")
         print(f"  CLARK_MAX:         {CLARK_MAX}")
         print(f"  EXTENSION range:   [{EXTENSION_MIN}, {EXTENSION_MAX}]")
         print(f"  MAX_CLARK_STEP:    {MAX_CLARK_STEP} / cycle")

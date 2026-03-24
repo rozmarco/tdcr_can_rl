@@ -9,9 +9,9 @@ env:
   name: "tdcr-v1"
   render: "rgb_array"
   run_env: True
-  num_episodes: 5
+  num_episodes: 10
   max_steps: 300
-  num_workers: 2
+  num_workers: 1
   frame_skips: 50
   timestep: 0.002
   allow_contact_goals: False
@@ -19,12 +19,13 @@ env:
 
   use_lookup_reward: True
   lookup_search_radius: 1
-  lookup_train_goal_count: 50
+  lookup_train_goal_count: 20
   lookup_npz_paths:
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free.npz"
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_50-100.npz"
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_100-150.npz"
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_150-200.npz"
+    - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_200-250.npz"
 
 buffer:
   max_size: 1000000
@@ -37,7 +38,7 @@ agent:
     betas: [0.9, 0.999]
     weight_decay: 0.01
   policy_lr: 0.0003
-  q_lr: 0.001
+  q_lr: 0.0001
   batch_size: 64
   gamma: 0.99
   tau: 0.005

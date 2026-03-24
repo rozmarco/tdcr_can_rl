@@ -83,8 +83,22 @@ class MultiPoseLookupTable:
             n = min(int(train_goal_count), self.num_goals)
             if n <= 0:
                 raise ValueError("train_goal_count must be >= 1")
-            self.train_goal_indices = np.arange(n, dtype=np.int32)
-
+        
+            # sample a random subset from ALL loaded goals
+            self.train_goal_indices = np.random.choice(
+                self.num_goals,
+                size=n,
+                replace=False
+            ).astype(np.int32)
+'''
+        if train_goal_count is None:
+            self.train_goal_indices = np.arange(self.num_goals, dtype=np.int32)
+        else:
+            n = min(int(train_goal_count), self.num_goals)
+            if n <= 0:
+                raise ValueError("train_goal_count must be >= 1")
+            self.train_goal_indices = np.arange(n, dtype=np.int32)'''
+            
     @staticmethod
     def wrap_angle(theta: float) -> float:
         return (theta + 2.0 * np.pi) % (2.0 * np.pi)

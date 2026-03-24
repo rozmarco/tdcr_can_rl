@@ -391,6 +391,8 @@ class CustomEnv(MujocoEnv):
     
         return total_reward
 
+
+    
     def is_terminal(self, obs):
         if not self.use_lookup_reward:
             return np.linalg.norm(obs["goal_rel_pos"]) < 0.02

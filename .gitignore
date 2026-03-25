@@ -52,4 +52,5 @@ logs/
 
 requirements.txt
 MUJOCO_LOG.TXT
-todo.txt
+todo.txt.nenv/
+*.npz

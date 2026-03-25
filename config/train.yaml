@@ -1,7 +1,7 @@
 scene: "tdcr_sim_mujoco/assets/tdcr/tdcr_linear_base_5_cyl_real.xml"
 workspace_npz: "tdcr_sim_mujoco/data/workspace_train.npz"
 
-epochs: 40
+epochs: 50
 device: "cuda"
 seed: 42
 
@@ -10,27 +10,19 @@ env:
   render: "rgb_array"
   run_env: True
   num_episodes: 5
-  max_steps: 300
-  num_workers: 2
+  max_steps: 1000
+  num_workers: 3
   frame_skips: 50
   timestep: 0.002
   allow_contact_goals: False
   rollout_data_dir: "tdcr_sim_mujoco/data/rollouts"
-
-  use_lookup_reward: True
-  lookup_search_radius: 1
-  lookup_train_goal_count: 50
-  lookup_npz_paths:
-    - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free.npz"
-    - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_50-100.npz"
-    - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_100-150.npz"
-    - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_150-200.npz"
+  lookup_table_npz: "lookup_tables_5cyl_all_goals.npz"
 
 buffer:
   max_size: 1000000
 
 agent:
-  r_dim: 42
+  r_dim: 41
   action_dim: 2
   optimizer:
     _target_: "AdamW"
@@ -38,13 +30,13 @@ agent:
     weight_decay: 0.01
   policy_lr: 0.0003
   q_lr: 0.001
-  batch_size: 64
+  batch_size: 256
   gamma: 0.99
   tau: 0.005
   alpha: 0.2
   horizon: 1
-  updates_per_epoch: 300   # fixed SAC gradient steps per epoch
-  checkpoint: 300          # save checkpoint every N total updates
+  updates_per_epoch: 5000   # fixed SAC gradient steps per epoch
+  checkpoint: 5000          # save checkpoint every N total updates
 
 model:
   policy:

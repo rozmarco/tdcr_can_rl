@@ -49,7 +49,17 @@ class Decoder(nn.Module):
         self.output_proj = nn.Linear(d_hidden, output_dim)
 
     def forward(self, x, z):
-        # [Batch, Horizon, Output_dim]
+        # x: [B, Horizon, input_dim]  — action noise sequence
+        # z: [B, d_cond] or [B, 1, d_cond] — conditioning embedding from encoder
+        #
+        # The encoder outputs [B, H, d_embedding]. When H=1 (as in the Q-network
+        # where state is a single timestep), z arrives as [B, 1, d_cond].
+        # FiLM expects a flat [B, d_cond] conditioning vector; passing [B, 1, d_cond]
+        # causes it to broadcast into a 4D tensor before conv1d, crashing Mamba.
+        # Squeeze out the spurious sequence dimension if present.
+        if z.dim() == 3 and z.size(1) == 1:
+            z = z.squeeze(1)  # [B, 1, d_cond] -> [B, d_cond]
+
         x = self.input_proj(x)
         
         for block in self.blocks:

@@ -22,4 +22,9 @@ class RobotFeatureEncoder(nn.Module):
         )
 
     def forward(self, x):
+        # Ensure input is on the same device as the model weights.
+        # Ray workers serialize tensors to CPU; this guards against the
+        # "Expected all tensors to be on the same device" RuntimeError.
+        device = next(self.parameters()).device
+        x = x.to(device)
         return self.mlp(x)

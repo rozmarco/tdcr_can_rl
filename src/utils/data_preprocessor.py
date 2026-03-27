@@ -52,23 +52,17 @@ def format_state(state, device=None) -> torch.Tensor:
 
 def format_reward(reward, device=None) -> torch.Tensor:
     r_list = [torch.as_tensor(item, dtype=torch.float32) for item in reward]
-    # squeeze only the last dim (horizon=1 case) — never the batch dim
     r_out = pad_sequence(r_list, batch_first=True, padding_value=0.0)
-    if r_out.dim() > 1 and r_out.shape[-1] == 1:
-        r_out = r_out.squeeze(-1)
-    if device:
-        r_out = r_out.to(device)
-    return r_out
+    # r_out is [B, H, 1] — sum reward over horizon, drop trailing 1
+    r_out = r_out.sum(dim=1).squeeze(-1)   # [B]
+    return r_out.to(device) if device else r_out
 
 def format_terminal(terminal, device=None) -> torch.Tensor:
     t_list = [torch.as_tensor(item, dtype=torch.float32) for item in terminal]
-    # squeeze only the last dim (horizon=1 case) — never the batch dim
     t_out = pad_sequence(t_list, batch_first=True, padding_value=1.0)
-    if t_out.dim() > 1 and t_out.shape[-1] == 1:
-        t_out = t_out.squeeze(-1)
-    if device:
-        t_out = t_out.to(device)
-    return t_out
+    # Episode is done if ANY step in the horizon was terminal
+    t_out = t_out.any(dim=1).float().squeeze(-1)   # [B]
+    return t_out.to(device) if device else t_out
 
 def format_action(action, device=None) -> torch.Tensor:
     a_list = [torch.as_tensor(item, dtype=torch.float32) for item in action]

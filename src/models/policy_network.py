@@ -91,63 +91,15 @@ class LatentPolicyPlanner(nn.Module):
         log_prob -= torch.log(1.0 - torch.tanh(u).pow(2) + 1e-6).sum(dim=-1, keepdim=True)
         return log_prob
 
-    def forward(
-        self, 
-        x: torch.Tensor, 
-        horizon: int = 1
-    ) -> torch.Tensor:
-        """
-        Perform a single-step reverse diffusion update for training the policy.
-
-        Args:
-            x (torch.Tensor): Current robot observation/state. Shape: [Batch, Features].
-            horizon (int): Number of timesteps to rollout.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: 
-                - actions (torch.Tensor): Tensor of shape [Batch, Horizon, Action_dim] containing
-                the predicted actions after applying tanh.
-                - log_pi (torch.Tensor): Tensor of shape [Batch, Horizon] (or compatible) representing
-                the log-probabilities of the predicted actions under the policy.
-        """
-        fused = self.encoder(x)
-        z, mu, log_std = self.latent(fused)
-
-        # B, L, D = z.shape
-        # device = z.device
-        # t = torch.randint(0, self.diffusion.diffusion_steps, (B,), dtype=torch.long, device=device)
-        # sequence = torch.randn((B, horizon, D), device=device)
-        # latent_plan = self.diffusion.reverse(sequence, z, t)
-        # plan = self.decoder(latent_plan, z)
-        plan = self.decoder(fused, z)
-
+    def forward(self, x, horizon=1):
+        fused = self.encoder(x)                    # [B, H, d_embedding]
+        z, mu, log_std = self.latent(fused.mean(dim=1))  # [B, d_latent] ✅
+        plan = self.decoder(fused, z)              # [B, H, action_dim]
         return F.tanh(plan), self.log_pi(mu, log_std)
-    
+
     @torch.no_grad()
-    def sample(
-        self, 
-        x: torch.Tensor, 
-        horizon: int = 1
-    ) -> torch.Tensor:
-        """
-        Perform a single/multi-step rollout of the policy over a given horizon.
-
-        Args:
-            x (torch.Tensor): Current robot observation/state. Shape: [Batch, Features].
-            horizon (int): Number of timesteps to rollout.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: 
-                - actions (torch.Tensor): Tensor of shape [Batch, Horizon, Action_dim] containing
-                the predicted actions after applying tanh.
-                - log_pi (torch.Tensor): Tensor of shape [Batch, Horizon] (or compatible) representing
-                the log-probabilities of the predicted actions under the policy.
-        """
-        fused = self.encoder(x)
-        z, mu, log_std = self.latent(fused)
-
-        # latent_plan = self.diffusion.sample(z, horizon)
-        # plan = self.decoder(latent_plan, z)
-        plan = self.decoder(fused, z)
-        
+    def sample(self, x, horizon=1):
+        fused = self.encoder(x)                    # [B, H, d_embedding]
+        z, mu, log_std = self.latent(fused.mean(dim=1))  # [B, d_latent] ✅
+        plan = self.decoder(fused, z)              # [B, H, action_dim]
         return F.tanh(plan), self.log_pi(mu, log_std)

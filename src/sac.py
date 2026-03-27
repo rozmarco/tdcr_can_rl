@@ -83,9 +83,9 @@ class SoftActorCritic(nn.Module):
 
         s      = format_flat_state(s,      self.device)   # [B, H, state_dim]
         s_next = format_flat_state(s_next, self.device)   # [B, H, state_dim]
-        r      = format_reward(r,    self.device).unsqueeze(-1).unsqueeze(-1)   # [B,1,1]
-        done   = format_terminal(done, self.device).unsqueeze(-1).unsqueeze(-1) # [B,1,1]
-        a      = format_action(a,    self.device).unsqueeze(1)                  # [B,1,A]
+        r      = format_reward(r,    self.device).unsqueeze(-1)   # [B, 1]
+        done   = format_terminal(done, self.device).unsqueeze(-1) # [B, 1]
+        a      = format_action(a,    self.device)                               # [B, H, A]
 
         # --- Target Q ---
         with torch.no_grad():

@@ -23,16 +23,15 @@ MAX_CLARK_STEP = 2.0   # Clark units per cycle  (~10% of full range)
 MAX_EXT_STEP   = 0.01  # metres per cycle       (~2.7% of full range)
 
 # Reward shaping scale.
-# The heuristic H is in units of arc-length (metres) weighted by lambda_progress.
-# Typical values are O(0.1–2.0). This scale factor brings the shaping signal
-# into the same range as dist_reward (which is O(-0.001) near goal, O(-1) far).
-# Start at 1.0 and tune if the shaping dominates or is invisible.
 SHAPING_SCALE = 1.0
+
+# Dwell: number of consecutive steps the tip must remain inside the goal
+# radius before the episode is considered a success.  5 steps = 500 ms.
+DWELL_REQUIRED = 3
 
 
 # ---------------------------------------------------------------------------
-# HeuristicTable — thin wrapper around the precomputed lookup table npz.
-# Kept here so env.py has no external import dependency.
+# HeuristicTable
 # ---------------------------------------------------------------------------
 
 class HeuristicTable:
@@ -40,34 +39,42 @@ class HeuristicTable:
     Loads the lookup table produced by generate_lookup_tables_gpu.py and
     exposes a single method:  phi(x, y, goal_idx) -> float
 
-    The potential Φ(s) is defined as:
-        phi = min over θ-bins of H_all[table_idx, ix, iy, :]
-    which is the smoothing procedure from Rao et al. Section III-D.
+    The potential Φ(s) = min over θ-bins of H_all[table_idx, ix, iy, :]
+    following the smoothing procedure from Rao et al. Section III-D.
 
     Shaped reward:
         r_shaped = r_task + SHAPING_SCALE * (phi(s_t) - phi(s_{t+1}))
-
-    Note the sign convention:  H is cost-to-go (smaller = closer to goal),
-    so *decreasing* H means progress, and the shaped reward should be
-    *positive* when H decreases.  Hence phi_prev - phi_next (not next - prev).
     """
 
-    # Substituted when a state is outside the grid or H is inf.
-    # Using a large-but-finite value avoids inf arithmetic in the reward.
     INF_SUBSTITUTE = 1e4
 
-    def __init__(self, npz_path: str):
+    def __init__(
+        self,
+        npz_path: str,
+        H_all: np.ndarray = None,
+        goal_to_table_idx: np.ndarray = None,
+    ):
+        # Always load the npz for grid metadata (xlim, ylim, cell_size).
+        # These are tiny scalars — cheap regardless of how the big arrays arrive.
         d = np.load(npz_path, allow_pickle=True)
-        self.H_all             = d["H_all"]               # (N_unique, Nx, Ny, Ntheta)
-        self.goal_to_table_idx = d["goal_to_table_idx"]   # (N_raw,)  int32, -1 = no table
+
+        if H_all is not None and goal_to_table_idx is not None:
+            # Pre-loaded from Ray shared memory — skip the 221MB array load.
+            self.H_all             = H_all
+            self.goal_to_table_idx = goal_to_table_idx
+        else:
+            # Local / non-Ray path — load everything from disk as before.
+            self.H_all             = d["H_all"]
+            self.goal_to_table_idx = d["goal_to_table_idx"]
+
         self.xlim      = (float(d["xlim"][0]), float(d["xlim"][1]))
         self.ylim      = (float(d["ylim"][0]), float(d["ylim"][1]))
         self.cell_size = float(d["cell_size"])
         _, self.Nx, self.Ny, _ = self.H_all.shape
 
-        n_tables   = self.H_all.shape[0]
-        n_raw      = len(self.goal_to_table_idx)
-        n_valid    = int((self.goal_to_table_idx >= 0).sum())
+        n_tables = self.H_all.shape[0]
+        n_raw    = len(self.goal_to_table_idx)
+        n_valid  = int((self.goal_to_table_idx >= 0).sum())
         print(
             f"[HeuristicTable] Loaded {n_tables} unique tables "
             f"covering {n_valid}/{n_raw} raw goals  "
@@ -82,22 +89,12 @@ class HeuristicTable:
         return ix, iy
 
     def phi(self, x: float, y: float, goal_idx: int) -> float:
-        """
-        Potential Φ(s) for end-effector at world position (x, y),
-        for the goal with index goal_idx in the original workspace npz.
-
-        Returns INF_SUBSTITUTE if:
-          - goal_idx has no precomputed table  (goal_to_table_idx == -1)
-          - the cell is unreachable in the Dijkstra search  (H == inf)
-        """
         tidx = int(self.goal_to_table_idx[goal_idx])
         if tidx < 0:
-            # No table for this goal — caller should fall back to unshaped reward
-            return None
-
-        ix, iy   = self._world_to_cell(x, y)
-        h_slice  = self.H_all[tidx, ix, iy, :]   # (Ntheta,)
-        val      = float(np.min(h_slice))
+            return self.INF_SUBSTITUTE
+        ix, iy  = self._world_to_cell(x, y)
+        h_slice = self.H_all[tidx, ix, iy, :]
+        val     = float(np.min(h_slice))
         return val if np.isfinite(val) else self.INF_SUBSTITUTE
 
     def has_table(self, goal_idx: int) -> bool:
@@ -113,32 +110,37 @@ class CustomEnv(MujocoEnv):
     Custom MuJoCo environment for a continuum manipulator (TDCR) with a
     linear sliding base, trained with SAC for goal-reaching tasks.
 
-    Goal positions are sampled from a pre-validated workspace npz file
-    (explored_configs_5cyl_labelled.npz).
+    Both goal positions and the heuristic lookup tables are loaded from a
+    single pre-computed npz file (lookup_tables_train.npz), which is produced
+    by generate_lookup_tables_gpu.py and contains:
 
-    Reward shaping
-    --------------
-    When a lookup_table_npz path is provided, the shaped reward is:
+        raw_goal_positions    (N_raw, 2)  — workspace XY positions
+        H_all                 (N_unique, Nx, Ny, Ntheta)
+        goal_to_table_idx     (N_raw,)    — maps each raw goal to H_all row
+        xlim, ylim, cell_size, Ntheta     — grid metadata
 
-        r = r_task  +  SHAPING_SCALE * (Φ(s_t) - Φ(s_{t+1}))
+    Pass the same file path for both workspace_npz and lookup_table_npz.
+    The legacy separate workspace_npz path is still supported for backwards
+    compatibility; if lookup_table_npz is None the env falls back to
+    workspace_npz for goal sampling and disables reward shaping.
 
-    where Φ(s) = min_θ H[goal_table_idx, ix, iy, :] from Rao et al.
-    If no table exists for the sampled goal, the reward falls back to r_task
-    with no shaping applied — training remains stable.
+    Success criterion
+    -----------------
+    The episode terminates successfully only after the tip remains within
+    the 2 cm goal radius for DWELL_REQUIRED consecutive steps (default 5,
+    i.e. 500 ms).  A single accidental crossing no longer counts.
+
+    Contact handling
+    ----------------
+    The flat contact_bonus has been removed.  Contact that lies on the
+    geometrically optimal path is already rewarded implicitly via the
+    heuristic shaping term Φ(s_t) - Φ(s_{t+1}), which was computed with
+    contact-aware motion primitives.  A small contact_penalty discourages
+    pathological obstacle-pushing that the flat bonus used to incentivise.
 
     Action space (2-D, continuous, [-1, 1]):
         action[0]  ->  Clark X target  mapped to [-CLARK_MAX,  +CLARK_MAX]
         action[1]  ->  extension target mapped to [EXTENSION_MIN, EXTENSION_MAX]
-
-    Observation space keys  (must match flatten_state and r_dim=41 for 5 cylinders):
-        tendon_length  (3,)
-        extension      (1,)
-        curvature_hist (n_curv_bins,)    default 10
-        contact_hist   (n_contact_bins,) default 10
-        goal_rel_pos   (2,)
-        obstacle_pos   (n_obstacles*2,)  relative XY per obstacle
-        obstacle_radius(n_obstacles,)    radius per obstacle
-        --- total for 5 cylinders: 3+1+10+10+2+10+5 = 41  (matches r_dim) ---
     """
 
     def __init__(
@@ -151,32 +153,19 @@ class CustomEnv(MujocoEnv):
         n_curv_bins: int = 10,
         n_contact_bins: int = 10,
         allow_contact_goals: bool = False,
-        lookup_table_npz: str = None,   # ← new: path to precomputed H tables
+        lookup_table_npz: str = None,
+        H_all: np.ndarray = None,
+        goal_to_table_idx: np.ndarray = None,
         **kwargs
     ):
-        """
-        Args:
-            scene_path:          Absolute path to the MuJoCo XML model file.
-            workspace_npz:       Path to explored_configs_5cyl_labelled.npz.
-            render_mode:         "human", "rgb_array", or None.
-            frame_skips:         Physics steps per control cycle (50 x 0.002 s = 100 ms).
-            timstep:             Physics integration step in seconds.
-            n_curv_bins:         Bins for the curvature histogram observation.
-            n_contact_bins:      Bins for the contact histogram observation.
-            allow_contact_goals: Include configs where tip contacts obstacle at goal.
-            lookup_table_npz:    Path to lookup_tables_5cyl_all_goals.npz produced
-                                 by generate_lookup_tables_gpu.py.
-                                 If None, reward shaping is disabled and the original
-                                 reward function is used unchanged.
-            **kwargs:            Passed through to MujocoEnv.
-        """
         self.n_curv_bins    = n_curv_bins
         self.n_contact_bins = n_contact_bins
 
-        # Load workspace before super().__init__ so obstacle count is known.
-        self._load_workspace(workspace_npz, allow_contact_goals)
-
-        # Temporarily set n_obstacles=0; _cache_ids() sets the real value.
+        # ── Decide which file to use for goal sampling ────────────────────
+        use_lookup = (lookup_table_npz is not None) or (H_all is not None)
+        goal_source = lookup_table_npz if lookup_table_npz is not None else workspace_npz
+        self._load_workspace(goal_source, allow_contact_goals,
+                            from_lookup_table=use_lookup)
         self.n_obstacles = 0
 
         super().__init__(
@@ -193,8 +182,6 @@ class CustomEnv(MujocoEnv):
 
         self.base_pos = np.array([0.0, 0.0])
 
-        # Tracks the current goal index into the workspace npz.
-        # Set by _sample_goal_from_workspace() on every reset.
         self._current_goal_idx: int = 0
         self.goal_pos = self._sample_goal_from_workspace()
 
@@ -213,66 +200,69 @@ class CustomEnv(MujocoEnv):
 
         self.model.opt.timestep = timstep
 
-        # ── Heuristic table (optional) ────────────────────────────────────
+        # ── Heuristic table ───────────────────────────────────────────────
         self._heuristic: HeuristicTable | None = None
-        if lookup_table_npz is not None:
-            self._heuristic = HeuristicTable(lookup_table_npz)
-        else:
-            print(
-                "[CustomEnv] lookup_table_npz not provided — "
-                "running with original reward function (no heuristic shaping)."
+        if lookup_table_npz is not None or H_all is not None:
+            # npz_path is needed for grid metadata (xlim, ylim, cell_size) even when
+            # arrays are pre-loaded — fall back to workspace_npz since they're the same file
+            self._heuristic = HeuristicTable(
+                npz_path=lookup_table_npz if lookup_table_npz is not None else workspace_npz,
+                H_all=H_all,
+                goal_to_table_idx=goal_to_table_idx,
             )
+        else:
+            print("[CustomEnv] lookup_table_npz not provided — running with original reward function...")
 
-        # Stores tip XY at the START of each step so we can compute Φ(s_t).
-        # Initialised to zeros; overwritten at the top of step().
         self._prev_tip_pos: np.ndarray = np.zeros(2, dtype=np.float64)
+
+        # ── Dwell counter ─────────────────────────────────────────────────
+        self._goal_dwell_steps: int = 0
 
     # ------------------------------------------------------------------
     # Workspace
     # ------------------------------------------------------------------
 
-    def _load_workspace(self, npz_path: str, allow_contact_goals: bool):
-        """Load and filter the pre-validated configuration workspace.
+    def _load_workspace(self, npz_path: str, allow_contact_goals: bool,
+                        from_lookup_table: bool = False):
+        ws = np.load(npz_path, allow_pickle=True)
 
-        Sets:
-            self._ws_tip_pos        (N, 2) float32  — XY tip positions
-            self._ws_actuators      (N, 2) float32  — [clark_x, slide_m]
-            self._ws_original_idx   (N,)   int32    — original row index in npz
-                                                       used to look up goal_to_table_idx
-        """
-        ws   = np.load(npz_path)
-        mask = np.ones(len(ws['tip_positions']), dtype=bool)
-        # if not allow_contact_goals:
-        #     mask &= ~ws['contact_at_goal']
+        if from_lookup_table:
+            all_positions = np.asarray(ws["raw_goal_positions"], dtype=np.float32)
+            N = len(all_positions)
+            idx = np.arange(N, dtype=np.int32)
 
-        idx = np.where(mask)[0]
-        self._ws_tip_pos       = ws['tip_positions'][idx, :2].astype(np.float32)
-        self._ws_actuators     = ws['actuator_configs'][idx].astype(np.float32)
-        self._ws_original_idx  = idx.astype(np.int32)   # maps local idx → npz row
+            self._ws_tip_pos      = all_positions[:, :2]
+            self._ws_actuators    = np.zeros((N, 2), dtype=np.float32)
+            self._ws_original_idx = idx
 
-        print(
-            f"Workspace loaded: {len(idx)} configs  "
-            f"Tip x=[{self._ws_tip_pos[:,0].min():.3f}, {self._ws_tip_pos[:,0].max():.3f}]  "
-            f"y=[{self._ws_tip_pos[:,1].min():.3f}, {self._ws_tip_pos[:,1].max():.3f}]"
-        )
+            print(
+                f"Workspace loaded from lookup table: {N} raw goals  "
+                f"x=[{self._ws_tip_pos[:,0].min():.3f}, {self._ws_tip_pos[:,0].max():.3f}]  "
+                f"y=[{self._ws_tip_pos[:,1].min():.3f}, {self._ws_tip_pos[:,1].max():.3f}]"
+            )
+        else:
+            mask = np.ones(len(ws['tip_positions']), dtype=bool)
+            idx  = np.where(mask)[0]
+            self._ws_tip_pos      = ws['tip_positions'][idx, :2].astype(np.float32)
+            self._ws_actuators    = ws['actuator_configs'][idx].astype(np.float32)
+            self._ws_original_idx = idx.astype(np.int32)
+
+            print(
+                f"Workspace loaded (legacy): {len(idx)} configs  "
+                f"x=[{self._ws_tip_pos[:,0].min():.3f}, {self._ws_tip_pos[:,0].max():.3f}]  "
+                f"y=[{self._ws_tip_pos[:,1].min():.3f}, {self._ws_tip_pos[:,1].max():.3f}]"
+            )
 
     def _sample_goal_from_workspace(self) -> np.ndarray:
-        """
-        Sample a random goal from the workspace.
-
-        Sets self._current_goal_idx to the original npz row index,
-        which is what goal_to_table_idx in the lookup table is keyed on.
-        """
         local_idx = np.random.randint(len(self._ws_tip_pos))
         self._current_goal_idx = int(self._ws_original_idx[local_idx])
         return self._ws_tip_pos[local_idx].copy()
 
     # ------------------------------------------------------------------
-    # Initialisation helpers  (unchanged)
+    # Initialisation helpers
     # ------------------------------------------------------------------
 
     def _cache_ids(self):
-        """Cache body/joint/actuator IDs. Sets self.n_obstacles."""
         possible_tip_names = ["tdcr_tip", "EE_pos", "ee_pos", "end_effector"]
         self.tip_body_id = None
         for name in possible_tip_names:
@@ -324,7 +314,7 @@ class CustomEnv(MujocoEnv):
         })
 
     # ------------------------------------------------------------------
-    # Observation helpers  (unchanged)
+    # Observation helpers
     # ------------------------------------------------------------------
 
     def _compute_curvature_histogram(self):
@@ -363,8 +353,8 @@ class CustomEnv(MujocoEnv):
     def _get_obstacle_radius(self):
         radii = []
         for name in self.obstacle_body_name:
-            body  = self.model.body(name)
-            g_id  = self.model.body_geomadr[body.id]
+            body = self.model.body(name)
+            g_id = self.model.body_geomadr[body.id]
             radii.append(self.model.geom_size[g_id][0])
         return np.array(radii, dtype=np.float32)
 
@@ -390,45 +380,23 @@ class CustomEnv(MujocoEnv):
 
     def get_reward(self, obs: dict, action: np.ndarray,
                    prev_tip_pos: np.ndarray, next_tip_pos: np.ndarray) -> float:
-        """
-        Compute the (optionally shaped) reward for one transition.
+        dist = np.linalg.norm(obs["goal_rel_pos"])
 
-        Task reward  (unchanged from original):
-            r_task = dist_reward + goal_bonus + contact_bonus
-                     + action_penalty + time_penalty
+        if self._goal_dwell_steps >= DWELL_REQUIRED:
+            goal_bonus = 100.0
+        else:
+            goal_bonus = 0.0
 
-        Shaped reward (when lookup table is available for this goal):
-            r = r_task  +  SHAPING_SCALE * (Φ(s_t) - Φ(s_{t+1}))
+        dist_reward     = -(dist ** 2)
+        contact_penalty = -0.02 * float(np.sum(obs["contact_hist"]))
+        action_penalty  = -0.0001 * float(np.sum(action ** 2))
+        time_penalty    = -0.0001
 
-        The shaping term is positive when H decreases (robot made progress)
-        and negative when H increases (robot moved away from goal).
+        r_task = dist_reward + goal_bonus + contact_penalty + action_penalty + time_penalty
 
-        Falls back to r_task alone if:
-          - No lookup table was loaded (lookup_table_npz=None)
-          - This episode's goal has no precomputed table (goal_to_table_idx=-1)
-          - H is inf at either tip position (unreachable cell)
-
-        Args:
-            obs:           next_state dict (same as before)
-            action:        action taken
-            prev_tip_pos:  world XY of tip BEFORE the physics step  (s_t)
-            next_tip_pos:  world XY of tip AFTER  the physics step  (s_{t+1})
-        """
-        # ── Task reward (identical to original get_reward) ────────────────
-        dist           = np.linalg.norm(obs["goal_rel_pos"])
-        goal_bonus     = 1000.0 if dist < 0.02 else 0.0
-        dist_reward    = -(dist ** 2)
-        contact_bonus  =  0.01   * np.sum(obs["contact_hist"])
-        action_penalty = -0.0001 * np.sum(action ** 2)
-        time_penalty   = -0.0001
-        r_task = dist_reward + goal_bonus + contact_bonus + action_penalty + time_penalty
-
-        # ── Heuristic shaping  Φ(s_t) - Φ(s_{t+1}) ──────────────────────
-        
         if self._heuristic is None:
             return r_task
 
-        # Fast check: skip if no table exists for this goal
         if not self._heuristic.has_table(self._current_goal_idx):
             return r_task
 
@@ -441,20 +409,27 @@ class CustomEnv(MujocoEnv):
             self._current_goal_idx
         )
 
-        # Safety clip (prevents huge spikes from unreachable states)
-        PHI_CLIP = 1e3
+        PHI_CLIP = 50
         phi_prev = min(phi_prev, PHI_CLIP)
         phi_next = min(phi_next, PHI_CLIP)
 
         shaping = SHAPING_SCALE * (phi_prev - phi_next)
-
         return r_task + shaping
 
-    def is_terminal(self, obs):
-        return np.linalg.norm(obs["goal_rel_pos"]) < 0.02
+    # ------------------------------------------------------------------
+    # Termination  (dwell-based)
+    # ------------------------------------------------------------------
+
+    def is_terminal(self, obs: dict) -> bool:
+        inside = np.linalg.norm(obs["goal_rel_pos"]) < 0.02
+        if inside:
+            self._goal_dwell_steps += 1
+        else:
+            self._goal_dwell_steps = 0
+        return self._goal_dwell_steps >= DWELL_REQUIRED
 
     # ------------------------------------------------------------------
-    # Action application  (unchanged)
+    # Action application
     # ------------------------------------------------------------------
 
     def _remap_action(self, action: np.ndarray):
@@ -494,29 +469,25 @@ class CustomEnv(MujocoEnv):
         qpos += np.random.uniform(-0.01, 0.01, size=qpos.shape)
         self.set_state(qpos, qvel)
         self.goal_pos = self._sample_goal_from_workspace()
-        # Reset prev tip pos so the first step doesn't use a stale value
-        self._prev_tip_pos = self.data.xpos[self.tip_body_id][:2].copy()
+        self._prev_tip_pos     = self.data.xpos[self.tip_body_id][:2].copy()
+        self._goal_dwell_steps = 0
         return self.get_state()
 
     def step(self, action: np.ndarray):
-        # ── Record tip position BEFORE physics step  (s_t) ───────────────
         prev_tip_pos = self.data.xpos[self.tip_body_id][:2].copy()
 
-        # ── Apply action + advance simulation ────────────────────────────
         clark_target, ext_target = self._remap_action(action)
         self._apply_clark_target(clark_target)
         self._apply_extension_target(ext_target)
         self.linear_base_ctrl.update_stiffness()
         self.do_simulation(self.data.ctrl, self.frame_skip)
 
-        # ── Record tip position AFTER physics step  (s_{t+1}) ────────────
         next_tip_pos = self.data.xpos[self.tip_body_id][:2].copy()
-        self._prev_tip_pos = next_tip_pos   # store for reference if needed
+        self._prev_tip_pos = next_tip_pos
 
-        # ── Build next state, compute shaped reward ───────────────────────
         next_state = self.get_state()
-        reward     = self.get_reward(next_state, action, prev_tip_pos, next_tip_pos)
         terminated = self.is_terminal(next_state)
+        reward     = self.get_reward(next_state, action, prev_tip_pos, next_tip_pos)
         return next_state, reward, terminated, False, {}
 
     def _print_init_state(self):
@@ -530,5 +501,6 @@ class CustomEnv(MujocoEnv):
         print(f"  EXTENSION range:   [{EXTENSION_MIN}, {EXTENSION_MAX}]")
         print(f"  MAX_CLARK_STEP:    {MAX_CLARK_STEP} / cycle")
         print(f"  MAX_EXT_STEP:      {MAX_EXT_STEP} / cycle")
+        print(f"  Dwell required:    {DWELL_REQUIRED} steps")
         print(f"  Heuristic shaping: {'enabled' if self._heuristic else 'disabled'}")
         print(f"-------------------------------\n")

@@ -29,10 +29,14 @@ def set_seed(seed: int = 42):
         torch.backends.cudnn.benchmark = False
 
 
-def run_environment(env_cls, scene_path, workspace_npz, loc):
+def run_environment(env_cls, scene_path, workspace_npz, loc,
+                    H_all_ref, goal_to_table_idx_ref, lookup_table_npz):  # ← add
     state_dict = {k: v.cpu() for k, v in policy_network.state_dict().items()}
     workers = [
-        env_cls.remote(i, True, scene_path, workspace_npz, state_dict, config, loc)
+        env_cls.remote(i, True, scene_path, workspace_npz, state_dict, config, loc,
+                        H_all_ref=H_all_ref,
+                        goal_to_table_idx_ref=goal_to_table_idx_ref,
+                        lookup_table_npz=str(lookup_table_npz))           # ← add
         for i in range(config['env']['num_workers'])
     ]
     return ray.get([w.run_session_remote.remote() for w in workers])
@@ -164,7 +168,19 @@ if __name__ == '__main__':
     total_updates     = 0
 
     os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+
     ray.init(ignore_reinit_error=True)
+
+    # ── Put the heavy arrays in Ray shared memory ONCE ───────────────────
+    # All workers will read from this single copy instead of each loading
+    # their own 221MB HeuristicTable.
+    lookup_npz_path = Path(config["env"]["lookup_table_npz"])
+    if not lookup_npz_path.is_absolute():
+        lookup_npz_path = PROJECT_ROOT_ / lookup_npz_path
+    _d = np.load(str(lookup_npz_path), allow_pickle=True)
+    H_all_ref             = ray.put(_d["H_all"])
+    goal_to_table_idx_ref = ray.put(_d["goal_to_table_idx"])
+    del _d  # free local copy immediately
 
     for epoch in tqdm(range(total_epochs), desc="Epochs", leave=True):
         run_name = f"run_{epoch}"
@@ -178,6 +194,9 @@ if __name__ == '__main__':
                     scene_path=str(scene_path),
                     workspace_npz=str(workspace_npz),
                     loc=run_name,
+                    H_all_ref=H_all_ref,
+                    goal_to_table_idx_ref=goal_to_table_idx_ref,
+                    lookup_table_npz=lookup_npz_path,             # ← add
                 )
             tqdm.write(f"\033[92mCompleted {len(results)} parallel sessions.\033[0m")
 

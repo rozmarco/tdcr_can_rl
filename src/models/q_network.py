@@ -36,8 +36,24 @@ class QNetwork(nn.Module):
     def forward(self, s, a):
         # s: [Batch, Horizon, State]
         # a: [Batch, Horizon, Action]
+
+        # Encode the state sequence -> [B, H, d_embedding]
         emb = self.encoder(s)
-        emb = self.decoder(a, emb)
-        r = self.ff(emb)
-        # r: [Batch, Horizon, 1]
-        return r
+
+        # The decoder's FiLM conditioning expects a flat [B, d_embedding] vector,
+        # not a sequence. Mean-pool across the horizon to produce a single context
+        # vector that summarises the full state trajectory.
+        #
+        # This was the root cause of the [256, 256, 1, 16] conv1d crash: when H>1
+        # (which only became common once reward shaping produced longer episodes),
+        # passing [B, H, d_embedding] directly as FiLM conditioning z caused
+        # broadcasting to create a 4D tensor before Mamba's conv1d.
+        z = emb.mean(dim=1)    # [B, d_embedding]
+
+        # Decode action trajectory conditioned on pooled state context
+        emb = self.decoder(a, z)   # [B, H, d_hidden//2]
+
+        r = self.ff(emb)           # [B, H, 1]
+
+        # Return a scalar Q-value per sample by averaging over the horizon
+        return r.mean(dim=1)       # [B, 1]

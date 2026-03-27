@@ -49,7 +49,10 @@ def plot_reward(path, run_name):
         Returns a dict mapping worker_id → concatenated episode rewards across all runs.
         Assumes CSVs are stored under run directories with worker ID in filename.
         """
-        run_dirs = sorted([d for d in os.listdir(path)])
+        run_dirs = sorted(
+            [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))],
+            key=lambda x: int(''.join(filter(str.isdigit, x)) or 0)
+        )
         worker_rewards = {}
 
         for run in run_dirs:

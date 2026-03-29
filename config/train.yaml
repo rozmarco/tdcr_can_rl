@@ -1,7 +1,7 @@
 scene: "tdcr_sim_mujoco/assets/tdcr/tdcr_linear_base_5_cyl_real.xml"
 workspace_npz: "tdcr_sim_mujoco/data/workspace_train.npz"
 
-epochs: 40
+epochs: 50
 device: "cuda"
 seed: 42
 
@@ -9,9 +9,9 @@ env:
   name: "tdcr-v1"
   render: "rgb_array"
   run_env: True
-  num_episodes: 10
-  max_steps: 300
-  num_workers: 1
+  num_episodes: 20
+  max_steps: 500
+  num_workers: 2
   frame_skips: 50
   timestep: 0.002
   allow_contact_goals: False
@@ -19,7 +19,7 @@ env:
 
   use_lookup_reward: True
   lookup_search_radius: 1
-  lookup_train_goal_count: 20
+  lookup_train_goal_count: 5
   lookup_npz_paths:
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free.npz"
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_50-100.npz"
@@ -28,7 +28,7 @@ env:
     - "/workspace/lookup_tables_5_cyl_RAO_LIKE_free_200-250.npz"
 
 buffer:
-  max_size: 1000000
+  max_size: 1500000
 
 agent:
   r_dim: 42
@@ -38,8 +38,8 @@ agent:
     betas: [0.9, 0.999]
     weight_decay: 0.01
   policy_lr: 0.0003
-  q_lr: 0.0001
-  batch_size: 64
+  q_lr: 0.00005
+  batch_size: 128
   gamma: 0.99
   tau: 0.005
   alpha: 0.2

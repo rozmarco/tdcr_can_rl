@@ -65,6 +65,7 @@ class CustomEnv(MujocoEnv):
         n_curv_bins: int = 10,
         n_contact_bins: int = 10,
         allow_contact_goals: bool = False,
+                
         **kwargs
     ):
         """
@@ -337,9 +338,10 @@ class CustomEnv(MujocoEnv):
             search_radius=self.lookup_search_radius,
         )
     
+
     def get_reward(self, obs, action):
         action_penalty = -0.0001 * np.sum(action ** 2)
-        time_penalty = -0.0001
+        time_penalty = -0.005
     
         if not self.use_lookup_reward:
             dist = np.linalg.norm(obs["goal_rel_pos"])
@@ -349,7 +351,6 @@ class CustomEnv(MujocoEnv):
     
         curr_cost, valid, _ = self._lookup_cost_current_pose()
     
-        # outside lookup support / unreachable
         if (not valid) or (not np.isfinite(curr_cost)):
             return -5.0 + action_penalty + time_penalty
     
@@ -358,20 +359,14 @@ class CustomEnv(MujocoEnv):
         else:
             delta_cost = float(self.prev_lookup_cost - curr_cost)
     
-        # keep update for next step
         self.prev_lookup_cost = curr_cost
     
-        # 1) progress reward
         progress_reward = 300.0 * delta_cost
+        cost_reward = 0.0
     
-        # 2) absolute cost shaping
-        cost_reward = -2.0 * curr_cost
-    
-        # 3) orientation shaping
         theta_err = abs(float(obs["goal_rel_theta"][0]))
         theta_penalty = -0.05 * theta_err
     
-        # 4) staged near-goal bonus
         success_bonus = 0.0
         if curr_cost < 0.10:
             success_bonus += 0.5
@@ -380,6 +375,8 @@ class CustomEnv(MujocoEnv):
         if curr_cost < 0.02:
             success_bonus += 2.0
     
+        goal_bonus = 200 if curr_cost <= 0.07 else 0.0
+    
         total_reward = (
             progress_reward
             + cost_reward
@@ -387,11 +384,10 @@ class CustomEnv(MujocoEnv):
             + action_penalty
             + time_penalty
             + success_bonus
+            + goal_bonus
         )
     
         return total_reward
-
-
     
     def is_terminal(self, obs):
         if not self.use_lookup_reward:
@@ -400,7 +396,8 @@ class CustomEnv(MujocoEnv):
         curr_cost, valid, _ = self._lookup_cost_current_pose()
         if (not valid) or (not np.isfinite(curr_cost)):
             return False
-        return curr_cost <= 0.02
+
+        return curr_cost <= 0.07
 
     # ------------------------------------------------------------------
     # Action application
@@ -461,7 +458,7 @@ class CustomEnv(MujocoEnv):
         if self.use_lookup_reward:
             curr_cost, valid, _ = self._lookup_cost_current_pose()
             self.prev_lookup_cost = curr_cost if valid and np.isfinite(curr_cost) else None
-    
+
         return state
 
     def step(self, action: np.ndarray):
@@ -473,7 +470,9 @@ class CustomEnv(MujocoEnv):
 
         next_state = self.get_state()
         reward     = self.get_reward(next_state, action)
+        
         terminated = self.is_terminal(next_state)
+
         return next_state, reward, terminated, False, {}
 
     def _print_init_state(self):

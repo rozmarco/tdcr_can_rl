@@ -43,6 +43,11 @@ class EnvRunner:
         seed: int = 42,
         device='cpu',
         env_config=None,
+
+        success_thresh: float = 0.07,
+        success_bonus: float = 200.0,
+        min_success_step: int = 5,
+        
     ):
         assert horizon >= 1, f"Horizon must be at least 1, but got {horizon}"
         config_env = env_config or {}
@@ -113,6 +118,7 @@ class EnvRunner:
             while not done:
                 action = self._get_action(state)
                 next_state, reward, terminated, truncated, info = self.env.step(action)
+                
                 done = terminated or truncated
 
                 # Skip step 0: state dict shape differs before first physics step.
